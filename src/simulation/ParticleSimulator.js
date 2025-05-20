@@ -16,11 +16,25 @@ import {
     computeForcePair
 } from './ParticlePhysics.js';
 
+// Import quantum mechanics functions
+import {
+    getQuantizedRadius,
+    updateConstants
+} from './QuantumMechanics.js';
+
 // Import camera and rendering engine
 import { Camera, Renderer } from './CameraRenderer.js';
 
 // === SIMULATION SETTINGS & CONFIGURATION ===
 const SIM_SETTINGS = {
+    // Quantum mechanics parameters
+    quantumOrbits: true,           // Enable/disable quantized electron orbits
+    bohrRadius: 40,                // Base Bohr radius (a₀) scaled for visualization
+    planckConstant: 10,            // Scaled Planck's constant (ħ)
+    quantumRestoringStrength: 0.05, // Strength of force restoring electrons to quantized orbits
+    maxQuantumNumber: 4,           // Maximum principal quantum number to use
+    debugQuantumOrbits: false,     // Enable visual debugging of quantum shells
+    
     // Physics
     dt: 0.001,                     // time step (seconds)
     emConst: 15000,                // Coulomb constant (increased for stronger attraction)
@@ -305,29 +319,20 @@ for (const typeKey in INITIAL_COUNTS) {
         usedProtons.push(protonIndex);
         
         const p = protons[protonIndex];
+          // Assign a random quantum number between 1 and maxQuantumNumber
+        const n = Math.floor(Math.random() * SIM_SETTINGS.maxQuantumNumber) + 1;
         
-        // Adjust electron position to be at an appropriate orbital distance
-        // Choose a random orbital shell (distance) between predefined values
-        // Using larger orbital distances for better visibility
-        const orbitalDistances = [150, 200, 250, 300];
-        const idealDistance = orbitalDistances[Math.floor(Math.random() * orbitalDistances.length)];
+        // Create a quantized orbit according to the Bohr model
+        const orbit = createElectronOrbit(e, p, SIM_SETTINGS, n);
         
-        // Calculate vector from proton to new electron position (random direction)
-        const theta = Math.random() * 2 * Math.PI;
-        const phi = Math.acos(2 * Math.random() - 1);
-        
-        // Position electron at ideal distance from proton
-        e.x = p.x + idealDistance * Math.sin(phi) * Math.cos(theta);
-        e.y = p.y + idealDistance * Math.sin(phi) * Math.sin(theta);
-        e.z = p.z + idealDistance * Math.cos(phi);
-        
-        // Create orbit using physics helper
-        const orbit = createElectronOrbit(e, p, SIM_SETTINGS);
-        
-        // Apply orbital velocity
+        // Apply orbital velocity from quantum calculations
         e.vx = orbit.vx;
         e.vy = orbit.vy;
         e.vz = orbit.vz;
+        
+        // Store quantum properties
+        e.quantumNumber = n;
+        e.quantumRadius = getQuantizedRadius(n);
         
         // Mark this electron as being in an orbital relationship
         e.orbiting = p;
@@ -415,6 +420,42 @@ document.addEventListener('keydown', e => {
             console.log(`Created complex atom with ${atom.nucleus.length} nucleons and ${atom.electronShells.flat().length} electrons`);
         }
     }
+    
+    // Press 'D' to toggle debug quantum orbit visualization
+    if (e.key.toLowerCase() === 'd') {
+        SIM_SETTINGS.debugQuantumOrbits = !SIM_SETTINGS.debugQuantumOrbits;
+        
+        // Show/hide visualization elements
+        if (!SIM_SETTINGS.debugQuantumOrbits && window.quantumShellElements) {
+            window.quantumShellElements.forEach(el => {
+                el.style.display = 'none';
+            });
+        }
+        
+        // Show notification
+        const debugStatus = SIM_SETTINGS.debugQuantumOrbits ? 'enabled' : 'disabled';
+        const notificationDiv = document.createElement('div');
+        notificationDiv.textContent = `Quantum shell visualization ${debugStatus}`;
+        notificationDiv.style.position = 'absolute';
+        notificationDiv.style.top = '20px';
+        notificationDiv.style.left = '50%';
+        notificationDiv.style.transform = 'translateX(-50%)';
+        notificationDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+        notificationDiv.style.color = 'white';
+        notificationDiv.style.padding = '8px 12px';
+        notificationDiv.style.borderRadius = '4px';
+        notificationDiv.style.fontFamily = 'sans-serif';
+        notificationDiv.style.fontSize = '14px';
+        notificationDiv.style.zIndex = '1001';
+        notificationDiv.style.transition = 'opacity 0.5s';
+        document.body.appendChild(notificationDiv);
+        
+        // Remove notification after a delay
+        setTimeout(() => {
+            notificationDiv.style.opacity = '0';
+            setTimeout(() => notificationDiv.remove(), 500);
+        }, 2000);
+    }
 });
 
 // Add visualization indicator for spacebar and A key functions
@@ -438,6 +479,9 @@ function addControlsIndicator() {
         <div><b>Click</b>: Particle explosion</div>
         <div><b>Right-Click</b>: Create black hole</div>
         <div><b>A</b>: Create complex atom</div>
+        <div><b>D</b>: Toggle quantum shell visualization</div>
+        <div style="margin-top:8px"><b>Electron Shells</b>: Using Bohr's quantized orbits</div>
+        <div><b>Shell Colors</b>: n=1 (bright blue) → n=4 (pale blue)</div>
     `;
     document.body.appendChild(instructionsDiv);
 }
@@ -451,6 +495,9 @@ addControlsIndicator();
 function update() {
     const { dt, slowFactor, focalLength } = SIM_SETTINGS;
 
+    // Ensure quantum mechanics module is using current settings
+    updateConstants(SIM_SETTINGS);
+
     // Update camera
     camera.update(dt, slowFactor, slowDownActive);
 
@@ -460,9 +507,85 @@ function update() {
     // Render using our rendering engine
     renderer.renderAxes(axes, camera, focalLength);
     renderer.renderParticles(particles, camera, focalLength);
+    
+    // Visualize quantized shells if debug mode is enabled
+    if (SIM_SETTINGS.debugQuantumOrbits) {
+        visualizeQuantumShells();
+    }
 
     // Continue the animation loop
     requestAnimationFrame(update);
+}
+
+// Visualization helper for quantum shells (for debugging)
+function visualizeQuantumShells() {
+    // Create shell visualization elements if they don't exist
+    if (!window.quantumShellElements) {
+        window.quantumShellElements = [];
+        const container = document.querySelector('.container');
+        
+        for (let n = 1; n <= SIM_SETTINGS.maxQuantumNumber; n++) {
+            const shellEl = document.createElement('div');
+            shellEl.className = 'quantum-shell';
+            shellEl.style.position = 'absolute';
+            shellEl.style.pointerEvents = 'none';
+            shellEl.style.border = `1px solid rgba(100, 200, 255, ${0.7 / n})`;
+            shellEl.style.borderRadius = '50%';
+            shellEl.style.boxSizing = 'border-box';
+            container.appendChild(shellEl);
+            window.quantumShellElements.push(shellEl);
+        }
+    }
+    
+    // Find a proton to visualize shells around
+    const centralProton = particles.find(p => p.name === 'proton' && p.hasElectron);
+    if (!centralProton) return;
+    
+    // Get camera for projection
+    const camPos = camera.getPosition();
+    const basis = camera.getBasis(camPos);
+    
+    // Update shell visualizations
+    for (let n = 1; n <= SIM_SETTINGS.maxQuantumNumber; n++) {
+        const shellEl = window.quantumShellElements[n-1];
+        const radius = getQuantizedRadius(n);
+        
+        // Project shell center
+        const projCenter = renderer.project(
+            { x: centralProton.x, y: centralProton.y, z: centralProton.z },
+            basis,
+            camPos,
+            SIM_SETTINGS.focalLength
+        );
+        
+        if (!projCenter) {
+            shellEl.style.display = 'none';
+            continue;
+        }
+        
+        // Project a point on the shell to determine size
+        const projEdge = renderer.project(
+            { x: centralProton.x + radius, y: centralProton.y, z: centralProton.z },
+            basis,
+            camPos,
+            SIM_SETTINGS.focalLength
+        );
+        
+        if (!projEdge) {
+            shellEl.style.display = 'none';
+            continue;
+        }
+        
+        // Calculate projected shell size
+        const projRadius = Math.abs(projEdge.x - projCenter.x);
+        const shellSize = projRadius * 2;
+        
+        // Position and size the shell visualization
+        shellEl.style.display = '';
+        shellEl.style.width = `${shellSize}px`;
+        shellEl.style.height = `${shellSize}px`;
+        shellEl.style.transform = `translate(${projCenter.x - projRadius}px, ${projCenter.y - projRadius}px)`;
+    }
 }
 
 update();

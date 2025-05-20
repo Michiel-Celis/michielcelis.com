@@ -1,6 +1,17 @@
 // === PARTICLE PHYSICS ENGINE ===
 // This module handles all particle physics calculations and interactions
 
+// Import the quantum mechanics functions
+import {
+    CONSTANTS,
+    getQuantizedRadius,
+    getQuantizedVelocity,
+    getNearestQuantumNumber,
+    applyQuantumConstraints,
+    createQuantizedElectronOrbit,
+    updateConstants
+} from './QuantumMechanics.js';
+
 // Vector operations
 function dot(a, b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
@@ -165,59 +176,20 @@ function randomVelocityVector(magnitude) {
     };
 }
 
-// Create particle-proton binding
-function createElectronOrbit(electron, proton, settings) {
-    // Calculate radial vector from proton to electron
-    const rx = electron.x - proton.x,
-          ry = electron.y - proton.y,
-          rz = electron.z - proton.z;
+// Create particle-proton binding with quantized (Bohr-style) orbits
+function createElectronOrbit(electron, proton, settings, quantumNumber = null) {
+    // Use the quantum mechanics module to create a quantized electron orbit
+    const orbit = createQuantizedElectronOrbit(electron, proton, settings, quantumNumber);
     
-    const dist = Math.hypot(rx, ry, rz) + 0.1;
+    // Store the quantum state in the electron object
+    electron.quantumNumber = orbit.quantumNumber;
+    electron.quantumRadius = orbit.radius;
     
-    // Normalize the radial vector
-    const rNorm = { 
-        x: rx / dist,
-        y: ry / dist,
-        z: rz / dist
-    };
-    
-    // Generate a random perpendicular axis for the orbital plane
-    // First create a random vector not aligned with rNorm
-    let wx = Math.random() * 2 - 1,
-        wy = Math.random() * 2 - 1,
-        wz = Math.random() * 2 - 1;
-    
-    const wlen = Math.hypot(wx, wy, wz) || 1;
-    wx /= wlen;
-    wy /= wlen;
-    wz /= wlen;
-    
-    // Cross product to get perpendicular vector (orbital axis)
-    let ux = ry * wz - rz * wy,
-        uy = rz * wx - rx * wz,
-        uz = rx * wy - ry * wx;
-    
-    const ulen = Math.hypot(ux, uy, uz) || 0.1;
-    ux /= ulen;
-    uy /= ulen;
-    uz /= ulen;
-    
-    // Calculate scientifically accurate orbital velocity based on Coulomb potential gradient
-    // For a Coulomb potential V_C(r) = k*q1*q2/r, the orbital velocity is:
-    // v = sqrt(k*q1*q2/(m*r)) where k is Coulomb constant
-    const v0 = Math.sqrt(
-        settings.emConst * Math.abs(electron.charge * proton.charge) / (electron.mass * dist)
-    );
-    
-    // Apply scaling factor - allows for easier visualization in simulation
-    const v = v0 * settings.electronOrbitScale;
-    
-    // Calculate velocity vector perpendicular to radius to create circular orbit
-    // v = ω × r where ω is perpendicular to the orbital plane
+    // Return the velocity components
     return {
-        vx: (uy * rNorm.z - uz * rNorm.y) * v,
-        vy: (uz * rNorm.x - ux * rNorm.z) * v,
-        vz: (ux * rNorm.y - uy * rNorm.x) * v
+        vx: orbit.vx,
+        vy: orbit.vy,
+        vz: orbit.vz
     };
 }
 
@@ -396,6 +368,9 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
     const {
         dt, emConst, weakDecayRate, ongoingEntropy, ongoingZEntropy
     } = settings;
+    
+    // Update constants in the quantum mechanics module
+    updateConstants(settings);
 
     // Build spatial hash for efficient collision detection
     const grid = buildSpatialHash(particles, settings.cellSize);
@@ -487,40 +462,42 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
         if (blackHoles[i].life <= 0) {
             blackHoles.splice(i, 1);
         }
-    }
-    
-    // Handle electron-specific orbital maintenance (modified to work with symplectic integration)
+    }    // Handle electron-specific orbital maintenance for quantized orbits
     for (const a of particles) {
         // Handle electron-specific physics for better orbital mechanics
         if (a.name === 'electron' && a.orbiting) {
             const p = a.orbiting;
             
-            // Calculate distance and direction to the proton
-            const dx = p.x - a.x, dy = p.y - a.y, dz = p.z - a.z;
-            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) || 0.1;
+            // Apply quantum constraints to enforce Bohr model
+            const quantumCorrections = applyQuantumConstraints(a, p);
             
-            // This modified orbital maintenance is more gentle and only applied
-            // when electrons drift too far from expected orbits
+            // Apply position correction toward nearest quantized radius
+            a.x += quantumCorrections.positionCorrection.x;
+            a.y += quantumCorrections.positionCorrection.y;
+            a.z += quantumCorrections.positionCorrection.z;
             
-            // First detect if we're very far from expected orbital radius
-            const idealOrbitalRadius = 200;
-            if (Math.abs(dist - idealOrbitalRadius) > 80) { // Only apply correction for large deviations
-                const dirX = dx / dist;
-                const dirY = dy / dist;
-                const dirZ = dz / dist;
+            // Apply velocity correction to match quantum velocity
+            a.vx += quantumCorrections.velocityCorrection.x;
+            a.vy += quantumCorrections.velocityCorrection.y;
+            a.vz += quantumCorrections.velocityCorrection.z;
+            
+            // Update electron's quantum properties
+            a.quantumNumber = quantumCorrections.quantumNumber;
+            a.quantumRadius = getQuantizedRadius(a.quantumNumber);
+            
+            // Visual feedback - change color based on the quantum number
+            // This makes it easy to see when electrons are in different shells
+            const shellColors = ['#00ffff', '#40a0ff', '#80c0ff', '#a0d0ff'];
+            const shellColor = shellColors[Math.min(a.quantumNumber - 1, shellColors.length - 1)] || 'cyan';
+            
+            // Only update color if it's changed
+            if (a.orbitColor !== shellColor) {
+                a.orbitColor = shellColor;
+                a.el.style.background = shellColor;
                 
-                // Apply very gentle correction of 10% of the distance difference
-                // This is a position correction, not a velocity one, and preserves
-                // the symplectic properties better than velocity damping
-                const distCorrection = 0.05 * (idealOrbitalRadius - dist);
-                
-                // Apply gentle position correction
-                a.x += dirX * distCorrection;
-                a.y += dirY * distCorrection;
-                a.z += dirZ * distCorrection;
-                
-                // This does violate strict energy conservation, but is much gentler
-                // than previous stability hacks, and only applies in extreme cases
+                // Adjust glow intensity based on quantum number
+                const glowIntensity = 8 - Math.min(a.quantumNumber, 4);
+                a.el.style.boxShadow = `0 0 ${glowIntensity}px ${shellColor}`;
             }
         }
     }
@@ -697,20 +674,20 @@ function createComplexAtom(protons, neutrons, electrons, settings, pos = { x: 0,
             // Golden spiral distribution for evenly spaced points on a sphere
             const phi = Math.acos(1 - 2 * (i + 0.5) / electronsInShell);
             const theta = Math.PI * (1 + Math.sqrt(5)) * (i + 0.5);
+              // Use the quantum shell number as the principal quantum number
+            const n = shellIndex + 1;
             
-            // Position electron at shell radius from nucleus
-            electron.x = centralProton.x + shellDistance * Math.sin(phi) * Math.cos(theta);
-            electron.y = centralProton.y + shellDistance * Math.sin(phi) * Math.sin(theta);
-            electron.z = centralProton.z + shellDistance * Math.cos(phi);
+            // Create a quantized orbit based on Bohr model
+            const orbit = createElectronOrbit(electron, centralProton, settings, n);
             
-            // Create orbital velocity relative to nucleus
-            const orbit = createElectronOrbit(electron, centralProton, settings);
+            // Apply orbital velocities
+            electron.vx = orbit.vx;
+            electron.vy = orbit.vy;
+            electron.vz = orbit.vz;
             
-            // Apply orbital velocity (scaled by shell number for different speeds)
-            const shellSpeedFactor = 1 / Math.sqrt(shellIndex + 1); // Outer shells are slower
-            electron.vx = orbit.vx * shellSpeedFactor;
-            electron.vy = orbit.vy * shellSpeedFactor;
-            electron.vz = orbit.vz * shellSpeedFactor;
+            // Store quantum properties
+            electron.quantumNumber = n;
+            electron.quantumRadius = getQuantizedRadius(n);
             
             // Mark electron as orbiting in this atom
             electron.orbiting = centralProton;

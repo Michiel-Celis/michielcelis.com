@@ -49,14 +49,13 @@ function randomSphericalCoords(minRadius, maxRadius) {
         radius,
         theta,
         phi,
-        // Convert to cartesian
         x: radius * Math.sin(phi) * Math.cos(theta),
         y: radius * Math.sin(phi) * Math.sin(theta),
-        z: radius * Math.cos(phi) * 0.8 // Scale z slightly to prevent particles from being too far in z axis
+        z: radius * Math.cos(phi)
     };
 }
 
-// Generate random velocity vector
+// Generate random velocity vector (for initial particle motion)
 function randomVelocityVector(magnitude) {
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(2 * Math.random() - 1);
@@ -68,62 +67,51 @@ function randomVelocityVector(magnitude) {
     };
 }
 
-// Create particle-proton binding
+// Function to set up electron-proton orbital binding
 function createElectronOrbit(electron, proton, settings) {
-    // Calculate radial vector from proton to electron
-    const rx = electron.x - proton.x,
-          ry = electron.y - proton.y,
-          rz = electron.z - proton.z;
+    // Calculate vector from proton to electron
+    const rx = electron.x - proton.x;
+    const ry = electron.y - proton.y;
+    const rz = electron.z - proton.z;
     
-    const dist = Math.hypot(rx, ry, rz) + 0.1;
+    // Get distance
+    const r = Math.sqrt(rx*rx + ry*ry + rz*rz);
     
-    // Normalize the radial vector
-    const rNorm = { 
-        x: rx / dist,
-        y: ry / dist,
-        z: rz / dist
-    };
+    // Normalize to unit vector
+    const ux = rx / r;
+    const uy = ry / r;
+    const uz = rz / r;
     
-    // Generate a random perpendicular axis for the orbital plane
-    // First create a random vector not aligned with rNorm
-    let wx = Math.random() * 2 - 1,
-        wy = Math.random() * 2 - 1,
-        wz = Math.random() * 2 - 1;
+    // Create a random orbital plane by finding a perpendicular vector to r
+    // Start with a random vector that's unlikely to be aligned with (ux,uy,uz)
+    let vx = Math.random() - 0.5;
+    let vy = Math.random() - 0.5;
+    let vz = Math.random() - 0.5;
     
-    const wlen = Math.hypot(wx, wy, wz) || 1;
-    wx /= wlen;
-    wy /= wlen;
-    wz /= wlen;
+    // Take cross product to get perpendicular vector
+    const wx = uy * vz - uz * vy;
+    const wy = uz * vx - ux * vz;
+    const wz = ux * vy - uy * vx;
     
-    // Cross product to get perpendicular vector (orbital axis)
-    let ux = ry * wz - rz * wy,
-        uy = rz * wx - rx * wz,
-        uz = rx * wy - ry * wx;
+    // Normalize
+    const w = Math.sqrt(wx*wx + wy*wy + wz*wz) || 1;
+    const nwx = wx / w;
+    const nwy = wy / w;
+    const nwz = wz / w;
     
-    const ulen = Math.hypot(ux, uy, uz) || 0.1;
-    ux /= ulen;
-    uy /= ulen;
-    uz /= ulen;
+    // Calculate orbital velocity
+    // v = sqrt(k*e²/m*r) * scale factor, where k is the Coulomb constant, e is charge
+    const v = Math.sqrt(settings.emConst * Math.abs(electron.charge * proton.charge) / (electron.mass * r)) * 
+              settings.electronOrbitScale;
     
-    // Calculate scientifically accurate orbital velocity based on Coulomb force
-    // Using v = sqrt(k*q1*q2/(m*r)) where k is Coulomb constant
-    const v0 = Math.sqrt(
-        settings.emConst * Math.abs(electron.charge * proton.charge) / (electron.mass * dist)
-    );
-    
-    // Apply scaling factor - allows for easier visualization in simulation
-    const v = v0 * settings.electronOrbitScale;
-    
-    // Calculate velocity vector perpendicular to radius to create circular orbit
-    // v = ω × r where ω is perpendicular to the orbital plane
+    // Return orbital velocity vector perpendicular to the radius vector
     return {
-        vx: (uy * rNorm.z - uz * rNorm.y) * v,
-        vy: (uz * rNorm.x - ux * rNorm.z) * v,
-        vz: (ux * rNorm.y - uy * rNorm.x) * v
+        vx: v * nwx,
+        vy: v * nwy,
+        vz: v * nwz
     };
 }
 
-// Create proton-neutron binding
 function createNucleonBinding(neutron, proton, settings) {
     // Position neutron at ~0.85×bindingDistance from proton (closer for tighter binding)
     const θ = Math.random() * 2 * Math.PI,
@@ -175,7 +163,8 @@ function createNucleonBinding(neutron, proton, settings) {
     ux /= ulen;
     uy /= ulen;
     uz /= ulen;
-      // Calculate orbital velocity magnitude based on nuclear binding forces
+    
+    // Calculate orbital velocity magnitude based on nuclear binding forces
     // Use a strengthened model with higher orbital velocity for better binding
     const orbitalVelocityMagnitude = Math.sqrt(settings.bindingSpringK / neutron.mass) * 0.7; // Increased from 0.5
     
@@ -203,10 +192,7 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
         dt, emConst, exclusionRadius, exclusionRepulsion,
         bindingSpringK, nuclearYukawaStrength, nuclearYukawaMu, nuclearRepulsionA,
         weakDecayRate, ongoingEntropy, ongoingZEntropy,
-        friction, bhGravity, speedOfLight,
-        closeRangeAttractionFactor, electronProtonAttractionFactor, 
-        protonNeutronAttractionFactor, protonProtonRepulsionFactor, 
-        electronElectronRepulsionFactor
+        friction, bhGravity, speedOfLight
     } = settings;
 
     // Build spatial hash for efficient collision detection
@@ -241,30 +227,40 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
                               uy = dy / d, 
                               uz = dz / d;
 
-                        // Coulomb force with modifiers
-                        let fe = -emConst * a.charge * b.charge / Math.max(d2, 100);
+                        // Coulomb force
+                        const fe = -emConst * a.charge * b.charge / Math.max(d2, 100);
                         
-                        // Apply close range attraction factor when particles are within attraction range
-                        if (d < settings.bindingDistance * 2) {
-                            fe *= closeRangeAttractionFactor;
-                        }
-                        
-                        // Fix for electron-electron interaction: ensure electrons strongly repel each other
+                        // Special handling for electron-electron interaction: ensure electrons strongly repel each other
                         // and cannot orbit each other due to same charge
                         if (a.name === 'electron' && b.name === 'electron') {
-                            // Increase repulsion between electrons to prevent orbiting
-                            const strongerRepulsion = -emConst * a.charge * b.charge * 5 * electronElectronRepulsionFactor / Math.max(d2, 100);
+                            // Increase repulsion between electrons to prevent orbiting, apply electronRepulsionFactor
+                            const strongerRepulsion = -emConst * a.charge * b.charge * 5 * settings.electronRepulsionFactor / Math.max(d2, 100);
                             fx += strongerRepulsion * ux;
                             fy += strongerRepulsion * uy;
                             fz += strongerRepulsion * uz;
-                        } else if ((a.name === 'electron' && b.name === 'proton') ||
+                        } else if ((a.name === 'electron' && b.name === 'proton') || 
+                                   (a.name === 'proton' && b.name === 'electron')) {
+                            // Apply electrostaticForceFactor for proton-electron interactions
+                            const adjustedFe = fe * settings.electrostaticForceFactor;
+                            fx += adjustedFe * ux; 
+                            fy += adjustedFe * uy; 
+                            fz += adjustedFe * uz;
+                        } else if (a.name === 'proton' && b.name === 'proton') {
+                            // Apply protonRepulsionFactor for proton-proton repulsion
+                            const adjustedFe = fe * settings.protonRepulsionFactor;
+                            fx += adjustedFe * ux; 
+                            fy += adjustedFe * uy; 
+                            fz += adjustedFe * uz;
+                        } else {
+                            // Normal Coulomb force for other interactions
+                            fx += fe * ux; 
+                            fy += fe * uy; 
+                            fz += fe * uz;
+                        }
+
+                        // Special handling for electron-proton pairs
+                        if ((a.name === 'electron' && b.name === 'proton') ||
                             (a.name === 'proton' && b.name === 'electron')) {
-                            // Apply electron-proton attraction factor
-                            const modifiedFe = fe * electronProtonAttractionFactor;
-                            fx += modifiedFe * ux; 
-                            fy += modifiedFe * uy; 
-                            fz += modifiedFe * uz;
-                            
                             // Enhanced stability for electron orbits
                             // Apply a small corrective force to maintain orbits
                             if (d > 50 && d < 200) {  // Optimal orbital range
@@ -293,48 +289,49 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
                                     fz += 0.5 * perpZ / perpLen;
                                 }
                             }
-                        }                        // Nuclear Yukawa + repulsion
+                        }
+                        
+                        // Nuclear Yukawa + repulsion
                         if ((a.name === 'proton' && b.name === 'neutron') ||
                             (a.name === 'neutron' && b.name === 'proton') ||
                             // Add proton-proton nuclear binding (for helium nuclei)
                             (a.name === 'proton' && b.name === 'proton' && d < settings.bindingDistance * 1.2)) {
                             
                             // Enhanced nuclear force for closer distances
-                            const distFactor = d < settings.bindingDistance ? 1.3 : 1.0;
+                            const distFactor = d < settings.bindingDistance ? 
+                                              1.3 * settings.closeRangeAttractionFactor : 
+                                              1.0;
                             
-                            // Apply stronger attractive force at short range with proton-neutron modifier
-                            const expT = Math.exp(-nuclearYukawaMu * d);
-                            
-                            let Fat, Frep;
-                            
-                            if ((a.name === 'proton' && b.name === 'neutron') ||
-                                (a.name === 'neutron' && b.name === 'proton')) {
-                                // Apply proton-neutron attraction factor
-                                Fat = nuclearYukawaStrength * expT * (nuclearYukawaMu * d + 1) / 
-                                      (d * d) * distFactor * protonNeutronAttractionFactor;
-                                Frep = 10 * nuclearRepulsionA / Math.pow(d, 13);  // Lower repulsion for p-n
-                            } else if (a.name === 'proton' && b.name === 'proton') {
-                                // Apply proton-proton attraction factor at close range and repulsion factor
-                                Fat = nuclearYukawaStrength * expT * (nuclearYukawaMu * d + 1) / 
-                                      (d * d) * distFactor;
-                                Frep = 15 * nuclearRepulsionA * protonProtonRepulsionFactor / Math.pow(d, 13); // Higher repulsion for p-p
-                            }
-                            
-                            const Fn = Fat - Frep;
+                            // Apply stronger attractive force at short range
+                            const expT = Math.exp(-nuclearYukawaMu * d),
+                                  // Apply nuclear force factor
+                                  // Stronger attraction with distance factor
+                                  Fat = nuclearYukawaStrength * expT * (nuclearYukawaMu * d + 1) / (d * d) * 
+                                        distFactor * settings.nuclearForceFactor,
+                                  
+                                  // Less repulsion to make binding easier
+                                  Frep = (a.name === 'proton' && b.name === 'proton') ? 
+                                         15 * nuclearRepulsionA / Math.pow(d, 13) * settings.protonRepulsionFactor : // Higher repulsion for p-p 
+                                         10 * nuclearRepulsionA / Math.pow(d, 13), // Lower repulsion for p-n
+                                         
+                                  Fn = Fat - Frep;
                             
                             fx += Fn * ux; 
                             fy += Fn * uy; 
                             fz += Fn * uz;
-                            
+
                             // Spring + damping if bound
                             if (a.boundTo === b) {
                                 // Calculate ideal binding distance (nuclear radius)
                                 const idealDist = settings.bindingDistance;
                                 
                                 // Strengthen the spring when particles get too far apart
-                                const distanceFactor = d > idealDist * 1.5 ? 4.0 : // Increased from 3.0 to 4.0
-                                                       d < idealDist * 0.7 ? 0.5 : // Reduced force when too close
-                                                       1.5; // Slightly stronger at normal range (increased from 1.0)
+                                // Apply closeRangeAttractionFactor to the binding
+                                const distanceFactor = d > idealDist * 1.5 ? 
+                                                       4.0 * settings.closeRangeAttractionFactor : // For far particles
+                                                       d < idealDist * 0.7 ? 
+                                                       0.5 * settings.closeRangeAttractionFactor : // For close particles
+                                                       1.5 * settings.closeRangeAttractionFactor; // Normal range
                                 
                                 // Spring force to maintain orbital distance
                                 const sp = -bindingSpringK * (d - idealDist) * distanceFactor;
@@ -377,7 +374,8 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
                                     fy += tnorm.y * speedCorrection;
                                     fz += tnorm.z * speedCorrection;
                                 }
-                                  // Shared nucleus attraction (for particles in the same nucleus)
+                                
+                                // Shared nucleus attraction (for particles in the same nucleus)
                                 if (a.nucleusId !== undefined && b.nucleusId !== undefined && 
                                     a.nucleusId === b.nucleusId) {
                                     // Apply an enhanced cohesive force to keep the nucleus together
@@ -404,7 +402,9 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
                                     }
                                 }
                             }
-                        }                        // Pauli exclusion
+                        }
+
+                        // Pauli exclusion
                         if (a.name === b.name && a.spin === b.spin && d < exclusionRadius) {
                             // Reduce repulsion for nucleons to allow them to bind more easily,
                             // but keep it high for electrons to prevent them from occupying the same orbital
@@ -431,7 +431,9 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
             fx += Fg * (dx / d); 
             fy += Fg * (dy / d); 
             fz += Fg * (dz / d);
-        }        // Central attractor gravity (if enabled)
+        }
+        
+        // Central attractor gravity (if enabled)
         if (settings.centralAttractor && settings.centralAttractor.enabled) {
             const attractor = settings.centralAttractor;
             const dx = attractor.position.x - a.x, 
@@ -439,7 +441,7 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
                   dz = attractor.position.z - a.z,
                   d2 = dx * dx + dy * dy + dz * dz + 1, // Add 1 to prevent division by zero
                   d = Math.sqrt(d2),
-                  Fg = attractor.strength * 1000000 * a.mass / d2; // Force proportional to particle mass
+                  Fg = attractor.strength * a.mass / d2; // Force proportional to particle mass
                   
             // Add force vector pointing toward central attractor
             fx += Fg * (dx / d); 
@@ -447,199 +449,82 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
             fz += Fg * (dz / d);
         }
 
-        // Weak decay
-        if (a.name === 'neutron' && Math.random() < weakDecayRate) {
-            a.name = 'proton'; 
-            a.charge = 1; 
-            a.color = 'red';
-            a.el.style.background = 'red';
-        }
+        // Apply force to get acceleration (F = ma → a = F/m)
+        const ax = fx / a.mass;
+        const ay = fy / a.mass;
+        const az = fz / a.mass;
 
-        // Relativistic mass (electron)
-        let massEff = a.mass;
-        if (a.name === 'electron') {
-            const v2 = a.vx * a.vx + a.vy * a.vy + a.vz * a.vz,
-                  β2 = Math.min(v2 / (speedOfLight * speedOfLight), 0.9999),
-                  gamma = 1 / Math.sqrt(1 - β2);
-            massEff = a.mass * gamma;
-        }
+        // Apply acceleration to update velocity (v += a * dt)
+        a.vx += ax * dt; 
+        a.vy += ay * dt; 
+        a.vz += az * dt;
 
-        // Integrate velocity
-        a.vx += (fx / massEff) * dt;
-        a.vy += (fy / massEff) * dt;
-        a.vz += (fz / massEff) * dt;
+        // Add a bit of ongoing randomness to prevent perfect orbits and make the system more chaotic/interesting
+        a.vx += (Math.random() - 0.5) * ongoingEntropy;
+        a.vy += (Math.random() - 0.5) * ongoingEntropy;
+        a.vz += (Math.random() - 0.5) * ongoingZEntropy;
 
-        // Jitter only for electrons
-        if (a.name === 'electron') {
-            a.vx += (Math.random() - 0.5) * ongoingEntropy * dt;
-            a.vy += (Math.random() - 0.5) * ongoingEntropy * dt;
-            a.vz += (Math.random() - 0.5) * ongoingZEntropy * dt;
-        }
-
-        // Friction
-        a.vx *= friction; 
-        a.vy *= friction; 
+        // Apply friction as a damping factor to velocity
+        a.vx *= friction;
+        a.vy *= friction;
         a.vz *= friction;
-    }
-
-    // Update positions & wrap
-    for (const a of particles) {
+    
+        // Apply velocity to update position (p += v * dt)
         a.x += a.vx * dt;
         a.y += a.vy * dt;
         a.z += a.vz * dt;
-        
-        // Wrap particles around at a fixed distance from origin (0,0,0) in all three dimensions
-        if (a.x > WRAP_DISTANCE) {
-            a.x = -WRAP_DISTANCE;
-        } else if (a.x < -WRAP_DISTANCE) {
-            a.x = WRAP_DISTANCE;
-        }
-        
-        if (a.y > WRAP_DISTANCE) {
-            a.y = -WRAP_DISTANCE;
-        } else if (a.y < -WRAP_DISTANCE) {
-            a.y = WRAP_DISTANCE;
-        }
-        
-        if (a.z > WRAP_DISTANCE) {
-            a.z = -WRAP_DISTANCE;
-        } else if (a.z < -WRAP_DISTANCE) {
-            a.z = WRAP_DISTANCE;
-        }
+
+        // Wrap particles around the edges of the world (toroidal wrapping)
+        if (a.x > WRAP_DISTANCE) a.x -= 2 * WRAP_DISTANCE;
+        if (a.y > WRAP_DISTANCE) a.y -= 2 * WRAP_DISTANCE;
+        if (a.z > WRAP_DISTANCE) a.z -= 2 * WRAP_DISTANCE;
+        if (a.x < -WRAP_DISTANCE) a.x += 2 * WRAP_DISTANCE;
+        if (a.y < -WRAP_DISTANCE) a.y += 2 * WRAP_DISTANCE;
+        if (a.z < -WRAP_DISTANCE) a.z += 2 * WRAP_DISTANCE;
     }
-    
-    // Update black holes (expire if lifetime depleted)
+
+    // --- Post-update pass ---
+    // Update black holes
     for (let i = blackHoles.length - 1; i >= 0; i--) {
         blackHoles[i].life -= dt;
         if (blackHoles[i].life <= 0) {
             blackHoles.splice(i, 1);
         }
-    }    // Special electron update for orbit maintenance
-    for (const a of particles) {
-        // Handle electron-specific physics for better orbital mechanics
-        if (a.name === 'electron') {
-            // If this electron is already orbiting a specific proton, maintain that relationship
-            if (a.orbiting) {
-                const p = a.orbiting;
-                
-                // Calculate distance and direction to the proton
-                const dx = p.x - a.x, dy = p.y - a.y, dz = p.z - a.z;
-                const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) || 0.1;
-                
-                // Calculate current orbital velocity
-                const radialVel = (a.vx * dx + a.vy * dy + a.vz * dz) / dist;
-                
-                // Current tangential velocity
-                const tvx = a.vx - radialVel * dx / dist;
-                const tvy = a.vy - radialVel * dy / dist;
-                const tvz = a.vz - radialVel * dz / dist;
-                const tangentialSpeed = Math.sqrt(tvx*tvx + tvy*tvy + tvz*tvz);
-                
-                // Calculate optimal orbital velocity using Coulomb law (v = sqrt(k*q1*q2/mr))
-                const optimalSpeed = Math.sqrt(settings.emConst * Math.abs(a.charge * p.charge) / (a.mass * dist));
-                
-                // Damp radial velocity (too much radial velocity breaks orbits)
-                a.vx -= 0.2 * radialVel * dx / dist; // Increased damping
-                a.vy -= 0.2 * radialVel * dy / dist;
-                a.vz -= 0.2 * radialVel * dz / dist;
-                
-                // Correct tangential velocity more aggressively to maintain orbits
-                if (Math.abs(tangentialSpeed - optimalSpeed) > 0.1 * optimalSpeed) {
-                    // Normalize current tangential velocity
-                    const tvNorm = tangentialSpeed > 0 ? 
-                        { x: tvx/tangentialSpeed, y: tvy/tangentialSpeed, z: tvz/tangentialSpeed } : 
-                        { x: 0, y: 0, z: 0 };
-                    
-                    // Adjust velocity to be closer to optimal (more aggressive correction)
-                    const correctionFactor = 0.3 * (optimalSpeed - tangentialSpeed);
-                    a.vx += tvNorm.x * correctionFactor;
-                    a.vy += tvNorm.y * correctionFactor;
-                    a.vz += tvNorm.z * correctionFactor;
-                }
-                
-                // Gently guide electron back to proper orbital distance if needed
-                // Using larger orbital distance for better visualization
-                const idealOrbitalRadius = 200; // Larger ideal radius
-                if (Math.abs(dist - idealOrbitalRadius) > 50) {
-                    const dirX = dx / dist;
-                    const dirY = dy / dist;
-                    const dirZ = dz / dist;
-                    
-                    // Calculate desired distance correction (gently push in or out)
-                    // More significant correction for better stability
-                    const distCorrection = 0.1 * (idealOrbitalRadius - dist);
-                    
-                    // Apply position correction
-                    a.x += dirX * distCorrection;
-                    a.y += dirY * distCorrection;
-                    a.z += dirZ * distCorrection;
-                }
-            } else {
-                // This electron isn't yet orbiting - try to find a proton to orbit
-                // This rarely happens now with our initialization, but kept for completeness
-                let nearest = null, minD2 = Infinity;
-                for (const p of particles) {
-                    if (p.name !== 'proton' || p.hasElectron) {
-                        continue;
-                    }
-                    
-                    const dx = p.x - a.x, dy = p.y - a.y, dz = p.z - a.z;
-                    const d2 = dx*dx + dy*dy + dz*dz;
-                    
-                    // Increased distance threshold to capture more potential orbits
-                    if (d2 < 90000 && d2 < minD2) {
-                        minD2 = d2;
-                        nearest = p;
-                    }
-                }
-                
-                // If we found a nearby free proton, try to establish orbit
-                if (nearest) {
-                    // Get current distance
-                    const dx = nearest.x - a.x, dy = nearest.y - a.y, dz = nearest.z - a.z;
-                    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) || 0.1;
-                    
-                    // If we're reasonably close, establish orbit
-                    if (dist < 400) { // Increased capture radius
-                        // Set up orbital parameters
-                        const orbit = createElectronOrbit(a, nearest, settings);
-                        
-                        // Apply orbital velocity with a gentle transition
-                        a.vx = a.vx * 0.1 + orbit.vx * 0.9; // More weight on new velocity
-                        a.vy = a.vy * 0.1 + orbit.vy * 0.9;
-                        a.vz = a.vz * 0.1 + orbit.vz * 0.9;
-                        
-                        // Mark relationship
-                        a.orbiting = nearest;
-                        nearest.hasElectron = true;
-                        
-                        // Visual indicator
-                        a.orbitColor = 'deepskyblue';
-                        a.el.style.background = 'deepskyblue';
-                    }
-                }
-            }
-        }
     }
-
-    return { particles, blackHoles };
 }
 
-// Create explosion effect centered on a particle
-function createExplosion(centerParticle, particles, explosionStrength) {
+// Function to create an explosion centered on a particle
+function createExplosion(center, particles, strength) {
     for (const p of particles) {
-        const dx = p.x - centerParticle.x, 
-              dy = p.y - centerParticle.y, 
-              dz = p.z - centerParticle.z,
-              d = Math.hypot(dx, dy, dz) + 0.1;
-              
-        p.vx += dx / d * explosionStrength;
-        p.vy += dy / d * explosionStrength;
-        p.vz += dz / d * explosionStrength;
+        if (p === center) continue;
+        
+        // Calculate distance from center
+        const dx = p.x - center.x;
+        const dy = p.y - center.y;
+        const dz = p.z - center.z;
+        const d2 = dx*dx + dy*dy + dz*dz;
+        
+        // Explosion force falls off with square of distance
+        if (d2 > 90000) continue; // Skip particles too far away
+        
+        const d = Math.sqrt(d2) || 0.1; // Avoid division by zero
+        
+        // Calculate unit vector pointing away from explosion center
+        const ux = dx / d;
+        const uy = dy / d;
+        const uz = dz / d;
+        
+        // Force is proportional to 1/d²
+        const force = strength / d2;
+        
+        // Apply force as instant velocity change
+        p.vx += force * ux;
+        p.vy += force * uy;
+        p.vz += force * uz;
     }
 }
 
-// Export functions
+// Export all the physics functions
 export {
     dot,
     cross,

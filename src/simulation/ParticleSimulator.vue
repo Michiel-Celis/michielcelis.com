@@ -10,8 +10,16 @@ export default {
   mounted() {
     // Import the simulation logic when the component is mounted
     // This ensures the DOM elements are available
-    import('./ParticleSimulator.js').then(() => {
-      console.log('Particle simulator initialized');
+    import('./ParticleSimulator.js').then(module => {
+      // Call the startSimulation function to initialize the simulation
+      if (module.startSimulation) {
+        module.startSimulation();
+        console.log('Particle simulator initialized');
+      } else {
+        console.error('startSimulation function not found');
+      }
+    }).catch(err => {
+      console.error('Failed to load particle simulator:', err);
     });
   }
 }

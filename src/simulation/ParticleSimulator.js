@@ -14,40 +14,52 @@ import {
 } from './ParticlePhysics.js';
 
 // Import camera and rendering engine
-import { Camera, Renderer } from './CameraRenderer.js';
+import { Camera, Renderer, toggleAxesVisibility } from './CameraRenderer.js';
 
 // === SIMULATION SETTINGS & CONFIGURATION ===
 const SIM_SETTINGS = {
     // Physics
     dt: 0.005,                    // time step (seconds)
     emConst: 15000,               // Coulomb constant (increased for stronger attraction)
+    
+    // Force modifiers (new parameters)
+    closeRangeAttractionFactor: 1.0,  // Modifies attraction between particles at close range
+    electronProtonAttractionFactor: 1.0, // Modifies attraction between electrons and protons
+    protonNeutronAttractionFactor: 1.0, // Modifies attraction between protons and neutrons
+    protonProtonRepulsionFactor: 1.0,  // Modifies repulsion between protons
+    electronElectronRepulsionFactor: 1.0, // Modifies repulsion between electrons
+    
     speedOfLight: 300,             // c in simulation units
-    nuclearYukawaStrength: 25000,  // Yukawa attractive strength for nuclear binding
-    nuclearYukawaMu: 0.2,          // Yukawa range parameter
-    nuclearRepulsionA: 1e6,        // repulsive-core constant
+    nuclearYukawaStrength: 350000,  // Yukawa attractive strength for nuclear binding (increased from 250000)
+    nuclearYukawaMu: 0.15,          // Yukawa range parameter (decreased from 0.2 for longer range)
+    nuclearRepulsionA: 0.9e6,        // repulsive-core constant (decreased for easier binding)
     weakDecayRate: 0.00001,        // neutron decay probability per update
-    exclusionRadius: 25,           // Pauli exclusion radius
-    exclusionRepulsion: 2,         // exclusion repulsion strength
-    bindingDistance: 15,           // binding distance for nucleons (reduced for tighter nuclei)
-    bindingSpringK: 15,            // spring constant for bound particles
+    exclusionRadius: 20,           // Pauli exclusion radius (decreased from 25)
+    exclusionRepulsion: 1.5,         // exclusion repulsion strength (decreased from 2)
+    bindingDistance: 20,           // binding distance for nucleons (increased from 15 for easier binding)
+    bindingSpringK: 25,            // spring constant for bound particles (increased from 15 for stronger binding)
     cellSize: 100,                 // spatial hashing cell size
     friction: 0.9999,              // velocity damping (very small to maintain momentum)
     initialEntropy: 500,           // initial random velocity (reduced for better orbital formation)
     ongoingEntropy: 5,             // per-frame jitter velocity (greatly reduced for orbital stability)
     ongoingZEntropy: 0.05,         // per-frame jitter vz (minimal for orbital stability)
-    explosionStrength: 500,        // click explosion strength
-    orbitCaptureZ: 0.25,           // Z threshold for binding (electrons)
-    bhGravity: 50000,              // black-hole gravitational G
+    explosionStrength: 5000,        // click explosion strength
+    orbitCaptureZ: 0.25,           // Z threshold for binding (electrons)    bhGravity: 50000,              // black-hole gravitational G
     bhLifetime: 3,                 // black-hole lifespan (s)
     electronOrbitScale: 3.0,       // increased for better orbit visibility
     scaleFactor: 2.0,              // zoom: larger = closer/larger
+    centralAttractor: {
+        enabled: true,             // enable/disable the central attractor
+        strength: 10,           // gravitational strength of central attractor (increased to match black hole)
+        position: {x: 0, y: 0, z: 0} // position of central attractor (center of world)
+    },
 
     // Particles
-    ElectronAmount: 80,            // initial electron count (slightly reduced for clearer orbits)
+    ElectronAmount: 60,            // initial electron count (slightly reduced for clearer orbits)
     ElectronSize: 4,               // electron size in pixels (increased for visibility)
-    ProtonAmount: 50,              // initial proton count
+    ProtonAmount: 40,              // initial proton count
     ProtonSize: 9,                 // proton size in pixels 
-    NeutronAmount: 50,             // initial neutron count
+    NeutronAmount: 40,             // initial neutron count
     NeutronSize: 9,                // neutron size in pixels
 
     // Camera & Rendering
@@ -73,6 +85,9 @@ const SIM_SETTINGS = {
     depthDarkeningFactor: 0.8      // How much to darken distant particles (0-1)
 };
 
+// Expose SIM_SETTINGS to window for external UI control
+window.SIM_SETTINGS = SIM_SETTINGS;
+
 // static view constants
 const MAX_Z = 500, MIN_Z = -500;  // Match these with WRAP_DISTANCE for consistent 3D boundaries
 const baseBlur = 0.01, blurScale = 0.5;
@@ -90,8 +105,8 @@ const axes = [
 ];
 
 // === CAMERA AND RENDERER INITIALIZATION ===
-const camera = new Camera(SIM_SETTINGS);
-const renderer = new Renderer(SIM_SETTINGS, document.querySelector('.container'));
+let camera = null;
+let renderer = null;
 
 // MOUSE & KEY STATE
 let dragging = false;
@@ -107,85 +122,166 @@ const PARTICLE_TYPES = {
 const INITIAL_COUNTS = { red:SIM_SETTINGS.ProtonAmount, cyan:SIM_SETTINGS.ElectronAmount, black:SIM_SETTINGS.NeutronAmount };
 
 // === STATE & INIT ===
-const container = document.querySelector('.container');
-
 const particles = [];
 const blackHoles = [];
+let container = null;
+let centralAttractorElement = null;
 
-// create particles
-for (const typeKey in INITIAL_COUNTS) {
+// Will be called after DOM is available
+function initializeDOM() {
+  // Get container
+  container = document.querySelector('.container');
+    // Create central attractor visual indicator
+  centralAttractorElement = document.createElement('div');
+  centralAttractorElement.className = 'central-attractor';
+  centralAttractorElement.style.position = 'absolute';
+  centralAttractorElement.style.width = '15px';
+  centralAttractorElement.style.height = '15px';
+  centralAttractorElement.style.borderRadius = '50%';
+  centralAttractorElement.style.background = 'rgba(255, 255, 255, 0.125)';
+  centralAttractorElement.style.boxShadow = '0 0 10px 5px rgba(255, 255, 255, 0.7)';
+  centralAttractorElement.style.pointerEvents = 'none';
+  centralAttractorElement.style.zIndex = '5';
+  centralAttractorElement.style.left = '50%';
+  centralAttractorElement.style.top = '50%';
+  centralAttractorElement.style.transform = 'translate(-50%, -50%)';
+  container.appendChild(centralAttractorElement);
+}
+
+// Position update function for central attractor
+function updateCentralAttractorPosition() {
+  if (!centralAttractorElement) return;
+  
+  try {
+    // Central attractor is at world origin
+    const attractor = {
+      x: SIM_SETTINGS.centralAttractor.position.x,
+      y: SIM_SETTINGS.centralAttractor.position.y,
+      z: SIM_SETTINGS.centralAttractor.position.z
+    };
+    
+    // Convert to screen coordinates
+    const screenX = window.innerWidth / 2;
+    const screenY = window.innerHeight / 2;
+    
+    // For simplicity, just position in center of screen
+    centralAttractorElement.style.left = `${screenX}px`;
+    centralAttractorElement.style.top = `${screenY}px`;
+    centralAttractorElement.style.transform = 'translate(-50%, -50%)';
+    
+    // Update visual appearance based on enabled state
+    centralAttractorElement.style.opacity = SIM_SETTINGS.centralAttractor.enabled ? '1' : '0.3';    // Simple brightness adjustment based on strength
+    if (SIM_SETTINGS.centralAttractor.enabled) {
+      centralAttractorElement.style.opacity = '1';
+      centralAttractorElement.style.boxShadow = '0 0 50px 8px rgba(255, 255, 255, 0.7)';
+    } else {
+      centralAttractorElement.style.opacity = '0.3';
+      centralAttractorElement.style.boxShadow = '0 0 5px 2px rgba(255, 255, 255, 0.7)';
+    }
+  } catch (err) {
+    console.error("Error updating central attractor:", err);
+  }
+}
+
+// Function to create particles
+function createParticles() {
+  if (!container) return;
+  
+  // Clear any existing particles
+  while (particles.length > 0) {
+    particles.pop();
+  }
+  
+  // Create new particles
+  for (const typeKey in INITIAL_COUNTS) {
     const type = PARTICLE_TYPES[typeKey];
     for (let i = 0; i < INITIAL_COUNTS[typeKey]; i++) {
-        const el = document.createElement('div');
-        el.className = 'firefly';
-        el.style.pointerEvents = 'auto';
-        el.style.background = type.color;
-        el.style.borderRadius = '50%'; // Ensure particles are perfectly round
-        
-        // Set initial size based on particle type
-        let baseSize;
-        if (type.name === 'electron') {
-            baseSize = SIM_SETTINGS.ElectronSize;
-        } else if (type.name === 'proton') {
-            baseSize = SIM_SETTINGS.ProtonSize;
-        } else { // neutron
-            baseSize = SIM_SETTINGS.NeutronSize;
-        }
+      const el = document.createElement('div');
+      el.className = 'firefly';
+      el.style.pointerEvents = 'auto';
+      el.style.background = type.color;
+      el.style.borderRadius = '50%'; // Ensure particles are perfectly round
+      
+      // Set initial size based on particle type
+      let baseSize;
+      if (type.name === 'electron') {
+        baseSize = SIM_SETTINGS.ElectronSize;
+      } else if (type.name === 'proton') {
+        baseSize = SIM_SETTINGS.ProtonSize;
+      } else { // neutron
+        baseSize = SIM_SETTINGS.NeutronSize;
+      }
         
         // Apply exact size in pixels
         el.style.width = `${baseSize}px`;
         el.style.height = `${baseSize}px`;
-        container.appendChild(el);
-
-        // Generate random position using physics helper
+        container.appendChild(el);        // Generate random position using physics helper
         // For electrons, create a wider distribution to increase chances of finding protons
+        // For protons and neutrons, create a tighter distribution to increase binding probability
         const position = type.name === 'electron' 
             ? randomSphericalCoords(150, 450) 
-            : randomSphericalCoords(100, 400);
+            : type.name === 'proton' || type.name === 'neutron'
+                ? randomSphericalCoords(50, 350) // Tighter distribution for nucleons
+                : randomSphericalCoords(100, 400);
         
         // Generate random velocity using physics helper
         // Electrons need initial velocity for proper orbital capture
-        // Use higher initial velocity for electrons to ensure they have enough energy for orbits
+        // Neutrons and protons need lower initial velocity for better binding
         const entropyValue = type.name === 'electron' 
             ? SIM_SETTINGS.initialEntropy * 1.5 
-            : SIM_SETTINGS.initialEntropy;
-        const velocity = randomVelocityVector(entropyValue);
-        
-        // Position coordinates are relative to world origin (0,0,0)
-        // which will be projected to screen center
-        const mass = Math.random() * (type.massRange[1] - type.massRange[0])
-                   + type.massRange[0];
-                   
-        particles.push({
-            el, name:type.name, color:type.color, charge:type.charge,
-            spin:type.spin||0, mass,
-            x: position.x,
-            y: position.y,
-            z: position.z,
-            vx: velocity.x,
-            vy: velocity.y,
-            vz: velocity.z,
-            boundTo:null
-        });
+            : type.name === 'proton' || type.name === 'neutron' 
+                ? SIM_SETTINGS.initialEntropy * 0.7 // Reduced for better binding
+                : SIM_SETTINGS.initialEntropy;
+      
+      const velocity = randomVelocityVector(entropyValue);
+      
+      // Get mass from type's mass range
+      const mass = type.massRange[0] + Math.random() * (type.massRange[1] - type.massRange[0]);
+      
+      // Create particle object (data + DOM element)
+      const particle = {
+        // Position
+        x: position.x, 
+        y: position.y, 
+        z: position.z,
+        // Velocity
+        vx: velocity.x, 
+        vy: velocity.y, 
+        vz: velocity.z,
+        // Properties
+        name: type.name,
+        charge: type.charge,
+        mass: mass,
+        color: type.color,
+        spin: Math.random() < 0.5 ? -0.5 : 0.5, // Quantum spin, -1/2 or +1/2 (scaled)
+        // Rendering element
+        el: el,
+        // For tracking electron-proton bonding
+        boundTo: null,
+        orbiting: null,
+        nucleusId: null
+      };
+      
+      particles.push(particle);
     }
+  }
 }
 
-// initial p–n binding (50%)
+// initial p–n binding (reset to ensure binding works)
 (() => {
     const protons  = particles.filter(p => p.name==='proton');
     const neutrons = particles.filter(p => p.name==='neutron');
     const pairs    = Math.min(protons.length, neutrons.length);
     
-    // Increase binding rate for more interesting nuclear dynamics
-    const bindCount = Math.floor(pairs * 0.7); 
+    // High binding rate to ensure we see nucleon binding
+    const bindCount = Math.floor(pairs * 0.8);
     
     // Create arrays to keep track of which particles we've already used
     const usedProtons = [];
     const usedNeutrons = [];
     
     // First pass: create neutron-proton pairs
-    for (let i=0; i<bindCount; i++) {
-        // Find unused proton
+    for (let i=0; i<bindCount; i++) {        // Find unused proton
         let protonIndex;
         do {
             protonIndex = Math.floor(Math.random() * protons.length);
@@ -206,33 +302,35 @@ for (const typeKey in INITIAL_COUNTS) {
         p.boundTo = n; 
         n.boundTo = p;
 
-        // Create binding using physics helper
-        const binding = createNucleonBinding(n, p, SIM_SETTINGS);
-        
-        // Apply new position and velocity
-        n.x = binding.x;
-        n.y = binding.y;
-        n.z = binding.z;
-        n.vx = binding.vx;
-        n.vy = binding.vy;
-        n.vz = binding.vz;
+        // Position neutron close to proton for reliable binding
+        // Fixed positioning with slight random offset
+        const offset = 20; // Fixed closer distance
+        n.x = p.x + (Math.random() * 2 - 1) * offset;
+        n.y = p.y + (Math.random() * 2 - 1) * offset;
+        n.z = p.z + (Math.random() * 2 - 1) * offset;
+
+        // Give gentle velocity for stable binding
+        n.vx = p.vx + (Math.random() * 10 - 5);
+        n.vy = p.vy + (Math.random() * 10 - 5);
+        n.vz = p.vz + (Math.random() * 10 - 5);
         
         // Add a nucleus identifier to help with visualization
         n.nucleusId = i;
         p.nucleusId = i;
     }
-    
-    // Second pass: create larger nuclei by binding additional neutrons to existing pairs
+      // Second pass: create larger nuclei by binding additional neutrons to existing pairs
     if (bindCount > 5) {
         // Number of larger nuclei to create (with 3 or 4 particles)
-        const largeNucleiCount = Math.min(5, Math.floor(bindCount/5));
+        const largeNucleiCount = Math.min(10, Math.floor(bindCount/3)); // Increased from 5 to 10 and from bindCount/5 to bindCount/3
         
         for (let i=0; i<largeNucleiCount; i++) {
             // Select a bound proton to attach another neutron to
             const nucleusId = Math.floor(Math.random() * bindCount);
             const primaryProton = protons.find(p => p.nucleusId === nucleusId);
             
-            if (!primaryProton) continue;
+            if (!primaryProton) {
+                continue;
+            }
             
             // Find an unused neutron
             let neutronIndex;
@@ -241,7 +339,9 @@ for (const typeKey in INITIAL_COUNTS) {
             } while (usedNeutrons.includes(neutronIndex));
             
             // If we can't find an unused neutron, skip this iteration
-            if (neutronIndex === undefined) continue;
+            if (neutronIndex === undefined) {
+                continue;
+            }
             
             usedNeutrons.push(neutronIndex);
             const additionalNeutron = neutrons[neutronIndex];
@@ -262,6 +362,51 @@ for (const typeKey in INITIAL_COUNTS) {
             
             // Add to same nucleus for visualization
             additionalNeutron.nucleusId = nucleusId;
+        }
+    }
+    
+    // Third pass: create proton-proton bindings (helium nuclei)
+    // Only try this if we have enough unused protons
+    const remainingProtons = protons.filter(p => !usedProtons.includes(protons.indexOf(p)));
+    if (remainingProtons.length >= 2) {
+        // Number of p-p pairs to create
+        const ppPairsCount = Math.min(5, Math.floor(remainingProtons.length / 2));
+        
+        for (let i=0; i<ppPairsCount; i++) {
+            // Find two unused protons
+            let proton1Index, proton2Index;
+            do {
+                proton1Index = Math.floor(Math.random() * protons.length);
+            } while (usedProtons.includes(proton1Index));
+            usedProtons.push(proton1Index);
+            
+            do {
+                proton2Index = Math.floor(Math.random() * protons.length);
+            } while (usedProtons.includes(proton2Index));
+            usedProtons.push(proton2Index);
+            
+            const p1 = protons[proton1Index];
+            const p2 = protons[proton2Index];
+            
+            // Create binding between protons
+            p1.boundTo = p2;
+            p2.boundTo = p1;
+            
+            // Position them closer together to overcome repulsion
+            const binding = createNucleonBinding(p1, p2, SIM_SETTINGS);
+            
+            // Apply new position and velocity to second proton
+            p2.x = binding.x;
+            p2.y = binding.y;
+            p2.z = binding.z;
+            p2.vx = binding.vx;
+            p2.vy = binding.vy;
+            p2.vz = binding.vz;
+            
+            // Assign a unique nucleus ID
+            const newNucleusId = bindCount + i;
+            p1.nucleusId = newNucleusId;
+            p2.nucleusId = newNucleusId;
         }
     }
 })();
@@ -335,10 +480,19 @@ for (const typeKey in INITIAL_COUNTS) {
     }
 })();
 
-// explosions & black-holes
-container.addEventListener('click', evt => {
+// Function to set up event listeners
+function setupEventListeners() {
+  if (!container) return;
+  
+  // Explosions
+  container.addEventListener('click', evt => {
     if (!evt.target.classList.contains('firefly')) {
-        return;
+      // If clicking outside the settings menu, hide it if visible
+      const settingsMenu = document.querySelector('.force-controls-popup');
+      if (settingsMenu && settingsMenu.style.display !== 'none') {
+        settingsMenu.style.display = 'none';
+      }
+      return;
     }
     evt.stopPropagation();
     const center = particles.find(p => p.el === evt.target),
@@ -348,35 +502,58 @@ container.addEventListener('click', evt => {
     
     // Create explosion using physics helper
     createExplosion(center, particles, SIM_SETTINGS.explosionStrength);
-});
-container.addEventListener('contextmenu', evt => {
+  });
+  
+  // Show settings menu on right-click
+  container.addEventListener('contextmenu', evt => {
     evt.preventDefault();
-    const camPos = camera.getPosition();
-    blackHoles.push({
-        x: evt.clientX, y: evt.clientY, z: camPos.z,
-        mass: 1e4, life: SIM_SETTINGS.bhLifetime
-    });
-});
+    
+    // Get the force controls element
+    const forceControls = document.querySelector('.force-controls');
+    if (!forceControls) {
+      return;
+    }
+    
+    // Turn it into a popup at the cursor position
+    forceControls.classList.add('force-controls-popup');
+    forceControls.style.display = 'block';
+    forceControls.style.position = 'fixed';
+    forceControls.style.top = `${evt.clientY}px`;
+    forceControls.style.left = `${evt.clientX}px`;
+    
+    // Ensure it stays within the viewport bounds
+    const rect = forceControls.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+      forceControls.style.left = `${window.innerWidth - rect.width - 10}px`;
+    }
+    if (rect.bottom > window.innerHeight) {
+      forceControls.style.top = `${window.innerHeight - rect.height - 10}px`;
+    }
+  });
 
-// — INPUT HANDLERS —
-// begin drag
-container.addEventListener('mousedown', e => {
+  // Begin drag
+  container.addEventListener('mousedown', e => {
+    // Don't start dragging if clicked on the settings menu
+    if (e.target.closest('.force-controls')) {
+      return;
+    }
+    
     dragging = true;
     lastMouse.x = e.clientX;
     lastMouse.y = e.clientY;
     slowDownActive = true;
-});
+  });
 
-// end drag
-container.addEventListener('mouseup', () => {
+  // End drag
+  container.addEventListener('mouseup', () => {
     dragging = false;
     slowDownActive = false;
-});
+  });
 
-// adjust orbit velocity on drag
-container.addEventListener('mousemove', e => {
+  // Adjust orbit velocity on drag
+  container.addEventListener('mousemove', e => {
     if (!dragging) {
-        return;
+      return;
     }
     const dx = e.clientX - lastMouse.x;
     const dy = e.clientY - lastMouse.y;
@@ -384,36 +561,86 @@ container.addEventListener('mousemove', e => {
     camera.vel.x += dy * SIM_SETTINGS.dragSpeed;
     lastMouse.x = e.clientX;
     lastMouse.y = e.clientY;
-});
+  });
 
-// zoom focal plane on wheel
-container.addEventListener('wheel', e => {
+  // Zoom focal plane on wheel
+  container.addEventListener('wheel', e => {
     e.preventDefault();
     camera.adjustFocus(e.deltaY);
-}, { passive: false });
+  }, { passive: false });
 
-// Create axis elements and add them to the container
+  // Toggle axes visibility with 'A' key
+  window.addEventListener('keydown', e => {
+    if (e.key.toLowerCase() === 'a') {
+      // Call the toggle function we imported
+      const axesVisible = toggleAxesVisibility();
+      console.log(`Axes visibility: ${axesVisible ? 'ON' : 'OFF'}`);
+    }
+  });
+  
+  // Hide settings menu when clicking outside
+  document.addEventListener('click', e => {
+    const forceControls = document.querySelector('.force-controls-popup');
+    if (forceControls && !forceControls.contains(e.target)) {
+      forceControls.style.display = 'none';
+    }
+  });
+}
 
-// Add styling and create DOM elements
-renderer.createParticleElements(particles);
-renderer.createAxisElements(axes);
+// Initialize the simulation
+function initializeSimulation() {
+  try {
+    // Initialize DOM elements
+    initializeDOM();
+    
+    // Initialize camera and renderer
+    camera = new Camera(SIM_SETTINGS);
+    renderer = new Renderer(SIM_SETTINGS, container);
+    
+    // Create particles
+    createParticles();
+    
+    // Set up event listeners
+    setupEventListeners();
+    
+    // Add particles to renderer
+    renderer.createParticleElements(particles);
+    renderer.createAxisElements(axes);
+    
+    // Start the animation loop
+    requestAnimationFrame(update);
+    console.log("Simulation initialized successfully");
+  } catch (error) {
+    console.error("Error initializing simulation:", error);
+  }
+}
 
 // main loop
 function update() {
+    if (!camera || !renderer) {
+      return;
+    }
+    
     const { dt, slowFactor, focalLength } = SIM_SETTINGS;
 
     // Update camera
-    camera.update(dt, slowFactor, slowDownActive);
-
-    // Update physics using physics engine
-    updateParticlePhysics(particles, blackHoles, SIM_SETTINGS, WRAP_DISTANCE);
+    camera.update(dt, slowFactor, slowDownActive);    // Update physics using physics engine - blackHoles array is now empty since we removed right-click black hole creation
+    updateParticlePhysics(particles, [], SIM_SETTINGS, WRAP_DISTANCE);
 
     // Render using our rendering engine
     renderer.renderAxes(axes, camera, focalLength);
     renderer.renderParticles(particles, camera, focalLength);
 
+    // Update central attractor position
+    if (centralAttractorElement) {
+      updateCentralAttractorPosition();
+    }
+
     // Continue the animation loop
     requestAnimationFrame(update);
 }
 
-update();
+// Export the initialization function to be called after DOM is ready
+export function startSimulation() {
+  initializeSimulation();
+}

@@ -1,0 +1,23 @@
+{
+  "name": "michielcelis-server",
+  "version": "1.0.0",
+  "description": "API proxy server for secure OpenAI API access",
+  "main": "server/api-proxy.js",
+  "scripts": {
+    "start": "node server/api-proxy.js",
+    "dev:server": "nodemon server/api-proxy.js",
+    "dev": "concurrently \"npm run dev:server\" \"vite\"",
+    "build": "vite build",
+    "serve": "NODE_ENV=production node server/api-proxy.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.1",
+    "nodemon": "^3.0.1"
+  }
+}

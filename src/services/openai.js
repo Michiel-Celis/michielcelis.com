@@ -1,51 +1,74 @@
 /**
- * OpenAI API Service
+ * OpenAI Assistant API Service
  * 
- * This service provides methods to interact with the OpenAI API,
- * primarily for chat completion functionality.
+ * This service provides methods to interact with the OpenAI Assistant API via a server-side proxy,
+ * keeping the API key secure on the server.
  */
 
-// Default options for API requests
-const defaultOptions = {
-  model: "gpt-3.5-turbo", // Default model, can be overridden
-  temperature: 0.7,       // Controls randomness: 0 is deterministic, 1 is creative
-  max_tokens: 200         // Maximum number of tokens to generate
-};
+// Server proxy URL - using local path to leverage Vite's proxy
+const API_PROXY_URL = '/api/chat';
+
+// Store the thread ID for conversation continuity
+let currentThreadId = null;
 
 /**
- * Sends a chat message to OpenAI API
+ * Sends a chat message to OpenAI Assistant API through the server-side proxy
  * @param {Array} messages - Array of message objects with role and content
- * @param {String} apiKey - OpenAI API Key
- * @param {Object} options - Additional options to override defaults
+ * @param {Object} options - Additional options
  * @returns {Promise} - Promise that resolves to the AI response
  */
-export async function sendChatMessage(messages, apiKey, options = {}) {
-  if (!apiKey) {
-    throw new Error('API key is required');
-  }
+export async function sendChatMessage(messages, apiKey = null, options = {}) {
+  // We only need the latest message since the conversation history is stored in the thread
+  const latestMessage = messages[messages.length - 1];
 
   const requestOptions = {
-    ...defaultOptions,
-    ...options,
-    messages
+    messages: [latestMessage],
+    threadId: currentThreadId // Include thread ID if we have one
   };
-
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    console.log('Sending message to API proxy:', JSON.stringify(requestOptions));
+    
+    const response = await fetch(API_PROXY_URL, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(requestOptions)
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || 'Failed to connect to OpenAI API');
+    
+    // First check if the response has content
+    const text = await response.text();
+    
+    if (!text) {
+      throw new Error('Empty response from server');
     }
-
-    const data = await response.json();
+      // Try to parse the response as JSON
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      console.error('Failed to parse JSON response:', text);
+      throw new Error('Invalid JSON response from server: ' + e.message);
+    }
+    
+    // Check for error in the response
+    if (!response.ok) {
+      const errorMessage = data.error?.message || 'Failed to connect to chat API';
+      console.error('API Error:', errorMessage);
+      throw new Error(errorMessage);
+    }
+    
+    // Store the thread ID for future messages
+    if (data.thread_id) {
+      console.log('Received thread ID:', data.thread_id);
+      currentThreadId = data.thread_id;
+    }
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      console.error('Invalid response format:', data);
+      throw new Error('Invalid response format from server');
+    }
+    
     return data.choices[0].message.content;
   } catch (error) {
     console.error('Error sending chat message:', error);

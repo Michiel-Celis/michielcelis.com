@@ -10,36 +10,14 @@ import {
     createElectronOrbit,
     createNucleonBinding,
     updateParticlePhysics,
-    createExplosion,
-    createComplexAtom,
-    computePotential,
-    computeForcePair
+    createExplosion
 } from './ParticlePhysics.js';
-
-// Import quantum mechanics functions
-import {
-    getQuantizedRadius,
-    updateConstants,
-    createQuantizedElectronOrbitWithExclusion,
-    applyQuantumExclusionConstraints,
-    getElectronicConfiguration
-} from './QuantumMechanics.js';
 
 // Import camera and rendering engine
 import { Camera, Renderer, toggleAxesVisibility } from './CameraRenderer.js';
 
 // === SIMULATION SETTINGS & CONFIGURATION ===
 const SIM_SETTINGS = {
-    // Quantum mechanics parameters
-    quantumOrbits: true,           // Enable/disable quantized electron orbits
-    pauliExclusion: true,          // Enable/disable Pauli exclusion principle
-    bohrRadius: 5,                // Base Bohr radius (a₀) scaled for visualization
-    planckConstant: 10,            // Scaled Planck's constant (ħ)
-    quantumRestoringStrength: 0.05, // Strength of force restoring electrons to quantized orbits
-    maxQuantumNumber: 4,           // Maximum principal quantum number to use
-    debugQuantumOrbits: false,     // Enable visual debugging of quantum shells
-    showElectronicConfig: false,   // Show electronic configuration display
-    
     // Physics
     dt: 0.005,                    // time step (seconds)
     emConst: 15000,               // Coulomb constant (increased for stronger attraction)
@@ -61,14 +39,14 @@ const SIM_SETTINGS = {
     bindingDistance: 20,           // binding distance for nucleons (increased from 15 for easier binding)
     bindingSpringK: 25,            // spring constant for bound particles (increased from 15 for stronger binding)
     cellSize: 100,                 // spatial hashing cell size
-    friction: 0.1,              // velocity damping (very small to maintain momentum)
-    initialEntropy: 5,           // initial random velocity (reduced for better orbital formation)
-    ongoingEntropy: 1,             // per-frame jitter velocity (greatly reduced for orbital stability)
+    friction: 0.9999,              // velocity damping (very small to maintain momentum)
+    initialEntropy: 500,           // initial random velocity (reduced for better orbital formation)
+    ongoingEntropy: 5,             // per-frame jitter velocity (greatly reduced for orbital stability)
     ongoingZEntropy: 0.05,         // per-frame jitter vz (minimal for orbital stability)
     explosionStrength: 5000,        // click explosion strength
     orbitCaptureZ: 0.25,           // Z threshold for binding (electrons)    bhGravity: 50000,              // black-hole gravitational G
     bhLifetime: 3,                 // black-hole lifespan (s)
-    electronOrbitScale: 5.0,       // increased for better orbit visibility
+    electronOrbitScale: 3.0,       // increased for better orbit visibility
     scaleFactor: 2.0,              // zoom: larger = closer/larger
     centralAttractor: {
         enabled: true,             // enable/disable the central attractor
@@ -98,7 +76,7 @@ const SIM_SETTINGS = {
     focalLength: 1000,             // perspective projection focal length
     nearClip: 100,                   // near clipping plane
     farClip: 500000,                 // far clipping plane
-    blurScale: 0.01,              // pixels of blur per unit of focal error
+    blurScale: 0.06,              // pixels of blur per unit of focal error
     maxRenderBlur: 30,              // blur threshold for culling
     focusBlurIntensity: 10.0,       // intensity multiplier for focal blur effect
     focusBlurThreshold: 500,       // threshold distance before blur starts to increase
@@ -466,20 +444,29 @@ function createParticles() {
         usedProtons.push(protonIndex);
         
         const p = protons[protonIndex];
-          // Assign a random quantum number between 1 and maxQuantumNumber
-        const n = Math.floor(Math.random() * SIM_SETTINGS.maxQuantumNumber) + 1;
         
-        // Create a quantized orbit according to the Bohr model
-        const orbit = createElectronOrbit(e, p, SIM_SETTINGS, n);
+        // Adjust electron position to be at an appropriate orbital distance
+        // Choose a random orbital shell (distance) between predefined values
+        // Using larger orbital distances for better visibility
+        const orbitalDistances = [150, 200, 250, 300];
+        const idealDistance = orbitalDistances[Math.floor(Math.random() * orbitalDistances.length)];
         
-        // Apply orbital velocity from quantum calculations
+        // Calculate vector from proton to new electron position (random direction)
+        const theta = Math.random() * 2 * Math.PI;
+        const phi = Math.acos(2 * Math.random() - 1);
+        
+        // Position electron at ideal distance from proton
+        e.x = p.x + idealDistance * Math.sin(phi) * Math.cos(theta);
+        e.y = p.y + idealDistance * Math.sin(phi) * Math.sin(theta);
+        e.z = p.z + idealDistance * Math.cos(phi);
+        
+        // Create orbit using physics helper
+        const orbit = createElectronOrbit(e, p, SIM_SETTINGS);
+        
+        // Apply orbital velocity
         e.vx = orbit.vx;
         e.vy = orbit.vy;
         e.vz = orbit.vz;
-        
-        // Store quantum properties
-        e.quantumNumber = n;
-        e.quantumRadius = getQuantizedRadius(n);
         
         // Mark this electron as being in an orbital relationship
         e.orbiting = p;
@@ -636,9 +623,6 @@ function update() {
     
     const { dt, slowFactor, focalLength } = SIM_SETTINGS;
 
-    // Ensure quantum mechanics module is using current settings
-    updateConstants(SIM_SETTINGS);
-
     // Update camera
     camera.update(dt, slowFactor, slowDownActive);    // Update physics using physics engine - blackHoles array is now empty since we removed right-click black hole creation
     updateParticlePhysics(particles, [], SIM_SETTINGS, WRAP_DISTANCE);
@@ -646,11 +630,6 @@ function update() {
     // Render using our rendering engine
     renderer.renderAxes(axes, camera, focalLength);
     renderer.renderParticles(particles, camera, focalLength);
-    
-    // Visualize quantized shells if debug mode is enabled
-    if (SIM_SETTINGS.debugQuantumOrbits) {
-        visualizeQuantumShells();
-    }
 
     // Update central attractor position
     if (centralAttractorElement) {

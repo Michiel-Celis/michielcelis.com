@@ -1,11 +1,44 @@
 <script setup>
 import ParticleSimulator from './simulation/ParticleSimulator.vue'
+import ParticleForceControls from './simulation/ParticleForceControls.vue'
+import BottomDock from './components/BottomDock.vue'
+import { ref, onMounted } from 'vue'
+
+// Reference to the SIM_SETTINGS object
+const attractorEnabled = ref(true)
+const attractorStrength = ref(50000)
+
+// Function to update settings
+function updateAttractorSettings() {
+  // Get the SIM_SETTINGS object from the window
+  const settings = window.SIM_SETTINGS
+  if (settings) {
+	settings.centralAttractor.enabled = attractorEnabled.value
+	settings.centralAttractor.strength = attractorStrength.value
+  }
+}
+
+// Initialize settings when mounted
+onMounted(() => {
+  // We need to wait for the simulator to initialize
+  setTimeout(() => {
+	if (window.SIM_SETTINGS) {
+	  attractorEnabled.value = window.SIM_SETTINGS.centralAttractor.enabled
+	  attractorStrength.value = window.SIM_SETTINGS.centralAttractor.strength
+	}
+  }, 500)
+})
 </script>
 
 <template>
-  <!-- ParticleSimulator will be rendered as background -->
-  <ParticleSimulator />
-  
+	<!-- ParticleSimulator will be rendered as background -->
+	<ParticleSimulator />
+	
+	<!-- Settings panel (shown on right-click) -->
+	<ParticleForceControls />
+	
+	<!-- Bottom Dock with Chat, Downloads and Info -->
+	<BottomDock />
 </template>
 
 <style scoped>
@@ -21,6 +54,48 @@ import ParticleSimulator from './simulation/ParticleSimulator.vue'
   align-items: center;
   justify-content: center;
   min-height: 100vh;
+}
+
+.settings-panel {
+  position: fixed;
+  top: 100px;
+  right: 10px;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 8px;
+  padding: 15px;
+  color: white;
+  z-index: 100;
+  backdrop-filter: blur(5px);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+  min-width: 200px;
+}
+
+.settings-panel h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+  padding-bottom: 5px;
+}
+
+.setting {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.setting label {
+  flex: 1;
+  margin-right: 10px;
+}
+
+.setting input[type="range"] {
+  flex: 2;
+}
+
+.setting .value {
+  margin-left: 10px;
+  min-width: 30px;
+  text-align: right;
 }
 
 .logos {

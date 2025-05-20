@@ -236,12 +236,10 @@ function createElectronOrbit(electron, proton, settings, quantumNumber = null) {
 
 // Create proton-neutron binding
 function createNucleonBinding(neutron, proton, settings) {
-    // Position neutron at the nuclear potential minimum defined by nuclearPotentialRange
-    // This is where the Woods-Saxon potential has its minimum, naturally creating the correct binding distance
+    // Position neutron at ~0.85×bindingDistance from proton (closer for tighter binding)
     const θ = Math.random() * 2 * Math.PI,
           φ = Math.acos(2 * Math.random() - 1),
-          // Use the range parameter as the equilibrium distance
-          r = settings.nuclearPotentialRange * 0.95; // Slightly inside minimum for stability
+          r = settings.bindingDistance * 0.85;
     
     // Calculate position relative to proton
     const relativePos = {
@@ -287,11 +285,9 @@ function createNucleonBinding(neutron, proton, settings) {
     ux /= ulen;
     uy /= ulen;
     uz /= ulen;
-    
-    // Calculate orbital velocity magnitude based on nuclear potential well
-    // V = -V0 at minimum, so kinetic energy ≈ V0/2 for bound state
-    // v = sqrt(2*E/m) = sqrt(V0/m)
-    const orbitalVelocityMagnitude = Math.sqrt(settings.nuclearPotentialDepth / neutron.mass) * 0.5;
+      // Calculate orbital velocity magnitude based on nuclear binding forces
+    // Use a strengthened model with higher orbital velocity for better binding
+    const orbitalVelocityMagnitude = Math.sqrt(settings.bindingSpringK / neutron.mass) * 0.7; // Increased from 0.5
     
     // Calculate tangential velocity vector (cross product of orbital axis and radial vector)
     const vx = (uy * rNorm.z - uz * rNorm.y) * orbitalVelocityMagnitude,
@@ -314,7 +310,13 @@ function createNucleonBinding(neutron, proton, settings) {
 // Calculate acceleration for a particle based on forces
 function calculateAcceleration(particle, particles, blackHoles, grid, settings, accelerations = {}) {
     const {
-        bhGravity, speedOfLight
+        dt, emConst, exclusionRadius, exclusionRepulsion,
+        bindingSpringK, nuclearYukawaStrength, nuclearYukawaMu, nuclearRepulsionA,
+        weakDecayRate, ongoingEntropy, ongoingZEntropy,
+        friction, bhGravity, speedOfLight,
+        closeRangeAttractionFactor, electronProtonAttractionFactor, 
+        protonNeutronAttractionFactor, protonProtonRepulsionFactor, 
+        electronElectronRepulsionFactor
     } = settings;
 
     let fx = 0, fy = 0, fz = 0;
@@ -356,35 +358,250 @@ function calculateAcceleration(particle, particles, blackHoles, grid, settings, 
                             continue;
                         }
                         
-                        const d = Math.sqrt(d2);
-                        const ux = dx / d;
-                        const uy = dy / d;
-                        const uz = dz / d;
+                        const d = Math.sqrt(d2) + 0.1,
+                              ux = dx / d, 
+                              uy = dy / d, 
+                              uz = dz / d;
+
+                        // Coulomb force with modifiers
+                        let fe = -emConst * a.charge * b.charge / Math.max(d2, 100);
                         
-                        // Apply minimal radial velocity damping (reduced from previous implementation)
-                        const radialVel = (particle.vx - b.vx) * ux + (particle.vy - b.vy) * uy + (particle.vz - b.vz) * uz;
-                        const dampingFactor = particle.name === 'electron' ? 0.05 : 0.1;
+                        // Apply close range attraction factor when particles are within attraction range
+                        if (d < settings.bindingDistance * 2) {
+                            fe *= closeRangeAttractionFactor;
+                        }
                         
-                        // Apply gentle damping only to radial component
-                        fx -= dampingFactor * radialVel * ux;
-                        fy -= dampingFactor * radialVel * uy;
-                        fz -= dampingFactor * radialVel * uz;
+                        // Fix for electron-electron interaction: ensure electrons strongly repel each other
+                        // and cannot orbit each other due to same charge
+                        if (a.name === 'electron' && b.name === 'electron') {
+                            // Increase repulsion between electrons to prevent orbiting
+                            const strongerRepulsion = -emConst * a.charge * b.charge * 5 * electronElectronRepulsionFactor / Math.max(d2, 100);
+                            fx += strongerRepulsion * ux;
+                            fy += strongerRepulsion * uy;
+                            fz += strongerRepulsion * uz;
+                        } else if ((a.name === 'electron' && b.name === 'proton') ||
+                            (a.name === 'proton' && b.name === 'electron')) {
+                            // Apply electron-proton attraction factor
+                            const modifiedFe = fe * electronProtonAttractionFactor;
+                            fx += modifiedFe * ux; 
+                            fy += modifiedFe * uy; 
+                            fz += modifiedFe * uz;
+                            
+                            // Enhanced stability for electron orbits
+                            // Apply a small corrective force to maintain orbits
+                            if (d > 50 && d < 200) {  // Optimal orbital range
+                                // Apply a slight damping to radial velocity component
+                                const radialVel = a.vx * ux + a.vy * uy + a.vz * uz;
+                                fx -= 0.1 * radialVel * ux;
+                                fy -= 0.1 * radialVel * uy;
+                                fz -= 0.1 * radialVel * uz;
+                                
+                                // Apply a slight boost to maintain orbital velocity if needed
+                                const orbitSpeed = Math.sqrt(
+                                    a.vx * a.vx + a.vy * a.vy + a.vz * a.vz - radialVel * radialVel
+                                );
+                                
+                                // If orbital speed is too low, provide a small boost perpendicular to radius
+                                if (orbitSpeed < Math.sqrt(emConst * Math.abs(a.charge * b.charge) / (a.mass * d)) * 0.8) {
+                                    // Create perpendicular vector for orbital boost
+                                    const perpX = a.vy * uz - a.vz * uy;
+                                    const perpY = a.vz * ux - a.vx * uz;
+                                    const perpZ = a.vx * uy - a.vy * ux;
+                                    
+                                    // Normalize and apply a small boost
+                                    const perpLen = Math.sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ) || 1;
+                                    fx += 0.5 * perpX / perpLen;
+                                    fy += 0.5 * perpY / perpLen;
+                                    fz += 0.5 * perpZ / perpLen;
+                                }
+                            }
+                        }                        // Nuclear Yukawa + repulsion
+                        if ((a.name === 'proton' && b.name === 'neutron') ||
+                            (a.name === 'neutron' && b.name === 'proton') ||
+                            // Add proton-proton nuclear binding (for helium nuclei)
+                            (a.name === 'proton' && b.name === 'proton' && d < settings.bindingDistance * 1.2)) {
+                            
+                            // Enhanced nuclear force for closer distances
+                            const distFactor = d < settings.bindingDistance ? 1.3 : 1.0;
+                            
+                            // Apply stronger attractive force at short range with proton-neutron modifier
+                            const expT = Math.exp(-nuclearYukawaMu * d);
+                            
+                            let Fat, Frep;
+                            
+                            if ((a.name === 'proton' && b.name === 'neutron') ||
+                                (a.name === 'neutron' && b.name === 'proton')) {
+                                // Apply proton-neutron attraction factor
+                                Fat = nuclearYukawaStrength * expT * (nuclearYukawaMu * d + 1) / 
+                                      (d * d) * distFactor * protonNeutronAttractionFactor;
+                                Frep = 10 * nuclearRepulsionA / Math.pow(d, 13);  // Lower repulsion for p-n
+                            } else if (a.name === 'proton' && b.name === 'proton') {
+                                // Apply proton-proton attraction factor at close range and repulsion factor
+                                Fat = nuclearYukawaStrength * expT * (nuclearYukawaMu * d + 1) / 
+                                      (d * d) * distFactor;
+                                Frep = 15 * nuclearRepulsionA * protonProtonRepulsionFactor / Math.pow(d, 13); // Higher repulsion for p-p
+                            }
+                            
+                            const Fn = Fat - Frep;
+                            
+                            fx += Fn * ux; 
+                            fy += Fn * uy; 
+                            fz += Fn * uz;
+                            
+                            // Spring + damping if bound
+                            if (a.boundTo === b) {
+                                // Calculate ideal binding distance (nuclear radius)
+                                const idealDist = settings.bindingDistance;
+                                
+                                // Strengthen the spring when particles get too far apart
+                                const distanceFactor = d > idealDist * 1.5 ? 4.0 : // Increased from 3.0 to 4.0
+                                                       d < idealDist * 0.7 ? 0.5 : // Reduced force when too close
+                                                       1.5; // Slightly stronger at normal range (increased from 1.0)
+                                
+                                // Spring force to maintain orbital distance
+                                const sp = -bindingSpringK * (d - idealDist) * distanceFactor;
+                                fx += sp * ux; 
+                                fy += sp * uy; 
+                                fz += sp * uz;
+                                
+                                // Improved orbital dynamics for bound particles
+                                // Calculate radial velocity component
+                                const radialVel = (a.vx - b.vx) * ux + (a.vy - b.vy) * uy + (a.vz - b.vz) * uz;
+                                
+                                // Apply stronger damping to radial velocity to maintain orbit
+                                const Fd = -70 * radialVel; // Increased from -50 to -70
+                                fx += Fd * ux; 
+                                fy += Fd * uy; 
+                                fz += Fd * uz;
+                                
+                                // Angular velocity stabilization (helps maintain orbital velocity)
+                                // First calculate tangential velocity
+                                const tvx = (a.vx - b.vx) - radialVel * ux;
+                                const tvy = (a.vy - b.vy) - radialVel * uy;
+                                const tvz = (a.vz - b.vz) - radialVel * uz;
+                                const tangentialSpeed = Math.sqrt(tvx*tvx + tvy*tvy + tvz*tvz);
+                                
+                                // Target orbital speed based on nuclear binding energy
+                                const targetSpeed = Math.sqrt(bindingSpringK / a.mass) * 0.5;
+                                
+                                // If orbital speed is too different from target, apply correction
+                                if (Math.abs(tangentialSpeed - targetSpeed) > 0.3 * targetSpeed) {
+                                    // Normalize tangential velocity
+                                    const tnorm = tangentialSpeed > 0.001 ? 
+                                        { x: tvx/tangentialSpeed, y: tvy/tangentialSpeed, z: tvz/tangentialSpeed } : 
+                                        { x: 0, y: 0, z: 0 };
+                                        
+                                    // Calculate speed correction
+                                    const speedCorrection = 0.1 * (targetSpeed - tangentialSpeed);
+                                    
+                                    // Apply orbital velocity correction
+                                    fx += tnorm.x * speedCorrection;
+                                    fy += tnorm.y * speedCorrection;
+                                    fz += tnorm.z * speedCorrection;
+                                }
+                                  // Shared nucleus attraction (for particles in the same nucleus)
+                                if (a.nucleusId !== undefined && b.nucleusId !== undefined && 
+                                    a.nucleusId === b.nucleusId) {
+                                    // Apply an enhanced cohesive force to keep the nucleus together
+                                    const nucleusCohesion = 1.0 * bindingSpringK * d; // Increased from 0.5
+                                    fx -= nucleusCohesion * ux * 0.15; // Increased from 0.1
+                                    fy -= nucleusCohesion * uy * 0.15;
+                                    fz -= nucleusCohesion * uz * 0.15;
+                                    
+                                    // Additional stabilization for nuclei
+                                    // Apply a damping force to relative motion between particles in same nucleus
+                                    const relVelX = a.vx - b.vx;
+                                    const relVelY = a.vy - b.vy;
+                                    const relVelZ = a.vz - b.vz;
+                                    
+                                    // Calculate magnitude of relative velocity
+                                    const relVelMag = Math.sqrt(relVelX*relVelX + relVelY*relVelY + relVelZ*relVelZ);
+                                    
+                                    // If relative speed is high, apply damping
+                                    if (relVelMag > 20) {
+                                        const dampingFactor = 0.2;
+                                        fx -= relVelX * dampingFactor;
+                                        fy -= relVelY * dampingFactor;
+                                        fz -= relVelZ * dampingFactor;
+                                    }
+                                }
+                            }
+                        }                        // Pauli exclusion
+                        if (a.name === b.name && a.spin === b.spin && d < exclusionRadius) {
+                            // Reduce repulsion for nucleons to allow them to bind more easily,
+                            // but keep it high for electrons to prevent them from occupying the same orbital
+                            const repulsionFactor = (a.name === 'electron') ? 1.0 : 0.6;
+                            const re = exclusionRepulsion * repulsionFactor / d2;
+                            fx -= re * ux; 
+                            fy -= re * uy; 
+                            fz -= re * uz;
+                        }
                     }
                 }
             }
         }
-    }    // Black-hole gravity
-    for (const bh of blackHoles) {
-        const dx = bh.x - particle.x, 
-              dy = bh.y - particle.y, 
-              dz = bh.z - particle.z,
-              d2 = dx * dx + dy * dy + dz * dz + 1, 
-              d = Math.sqrt(d2),
-              Fg = bhGravity * (bh.mass * particle.mass) / d2;
-              
-        fx += Fg * (dx / d); 
-        fy += Fg * (dy / d); 
-        fz += Fg * (dz / d);
+
+        // Black-hole gravity
+        for (const bh of blackHoles) {
+            const dx = bh.x - a.x, 
+                  dy = bh.y - a.y, 
+                  dz = bh.z - a.z,
+                  d2 = dx * dx + dy * dy + dz * dz + 1, 
+                  d = Math.sqrt(d2),
+                  Fg = bhGravity * (bh.mass * a.mass) / d2;
+                  
+            fx += Fg * (dx / d); 
+            fy += Fg * (dy / d); 
+            fz += Fg * (dz / d);
+        }        // Central attractor gravity (if enabled)
+        if (settings.centralAttractor && settings.centralAttractor.enabled) {
+            const attractor = settings.centralAttractor;
+            const dx = attractor.position.x - a.x, 
+                  dy = attractor.position.y - a.y, 
+                  dz = attractor.position.z - a.z,
+                  d2 = dx * dx + dy * dy + dz * dz + 1, // Add 1 to prevent division by zero
+                  d = Math.sqrt(d2),
+                  Fg = attractor.strength * 1000000 * a.mass / d2; // Force proportional to particle mass
+                  
+            // Add force vector pointing toward central attractor
+            fx += Fg * (dx / d); 
+            fy += Fg * (dy / d); 
+            fz += Fg * (dz / d);
+        }
+
+        // Weak decay
+        if (a.name === 'neutron' && Math.random() < weakDecayRate) {
+            a.name = 'proton'; 
+            a.charge = 1; 
+            a.color = 'red';
+            a.el.style.background = 'red';
+        }
+
+        // Relativistic mass (electron)
+        let massEff = a.mass;
+        if (a.name === 'electron') {
+            const v2 = a.vx * a.vx + a.vy * a.vy + a.vz * a.vz,
+                  β2 = Math.min(v2 / (speedOfLight * speedOfLight), 0.9999),
+                  gamma = 1 / Math.sqrt(1 - β2);
+            massEff = a.mass * gamma;
+        }
+
+        // Integrate velocity
+        a.vx += (fx / massEff) * dt;
+        a.vy += (fy / massEff) * dt;
+        a.vz += (fz / massEff) * dt;
+
+        // Jitter only for electrons
+        if (a.name === 'electron') {
+            a.vx += (Math.random() - 0.5) * ongoingEntropy * dt;
+            a.vy += (Math.random() - 0.5) * ongoingEntropy * dt;
+            a.vz += (Math.random() - 0.5) * ongoingZEntropy * dt;
+        }
+
+        // Friction
+        a.vx *= friction; 
+        a.vy *= friction; 
+        a.vz *= friction;
     }
 
     // Relativistic mass (electron)
@@ -532,15 +749,23 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
                 // Use the color from the quantum state
                 shellColor = a.shellColor || '#00ffff';
             } else {
-                // Fallback to simple coloring based on quantum number
-                const shellColors = ['#00ffff', '#40a0ff', '#80c0ff', '#a0d0ff'];
-                shellColor = shellColors[Math.min(a.quantumNumber - 1, shellColors.length - 1)] || 'cyan';
-            }
-            
-            // Only update color if it's changed
-            if (a.orbitColor !== shellColor) {
-                a.orbitColor = shellColor;
-                a.el.style.background = shellColor;
+                // This electron isn't yet orbiting - try to find a proton to orbit
+                // This rarely happens now with our initialization, but kept for completeness
+                let nearest = null, minD2 = Infinity;
+                for (const p of particles) {
+                    if (p.name !== 'proton' || p.hasElectron) {
+                        continue;
+                    }
+                    
+                    const dx = p.x - a.x, dy = p.y - a.y, dz = p.z - a.z;
+                    const d2 = dx*dx + dy*dy + dz*dz;
+                    
+                    // Increased distance threshold to capture more potential orbits
+                    if (d2 < 90000 && d2 < minD2) {
+                        minD2 = d2;
+                        nearest = p;
+                    }
+                }
                 
                 // Adjust glow intensity based on quantum number
                 const n = a.quantumState ? a.quantumState.n : (a.quantumNumber || 1);

@@ -1,6 +1,14 @@
 // === QUANTUM MECHANICS MODULE ===
 // This module implements quantum mechanics principles for the simulation
 
+// Import the quantum shell module for Pauli exclusion
+import {
+    createQuantizedElectronOrbitWithExclusion,
+    applyQuantumExclusionConstraints,
+    getElectronicConfiguration,
+    getElectronQuantumState
+} from './QuantumShell.js';
+
 // Get constants from simulation settings
 // This will be defined when imported into the simulation context
 let SIM_SETTINGS = null;
@@ -278,9 +286,13 @@ function createQuantizedElectronOrbit(electron, proton, settings, n = null) {
 export {
     CONSTANTS,
     getQuantizedRadius,
-    getQuantizedVelocity,
-    getNearestQuantumNumber,
+    getQuantizedVelocity,    getNearestQuantumNumber,
     applyQuantumConstraints,
     createQuantizedElectronOrbit,
-    updateConstants
+    updateConstants,
+    // Re-export quantum shell functions for convenience
+    createQuantizedElectronOrbitWithExclusion,
+    applyQuantumExclusionConstraints,
+    getElectronicConfiguration,
+    getElectronQuantumState
 };

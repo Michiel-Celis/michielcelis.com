@@ -8,11 +8,13 @@
 export default {
   name: 'ParticleSimulator',
   mounted() {
-    // Import the simulation logic when the component is mounted
-    // This ensures the DOM elements are available
-    import('./ParticleSimulator.js').then(() => {
-      console.log('Particle simulator initialized');
-    });
+    // Add a short delay to ensure the DOM is fully rendered
+    setTimeout(() => {
+      // Import the simulation logic when the component is mounted
+      import('./ParticleSimulator.js').then(() => {
+        console.log('Particle simulator initialized');
+      });
+    }, 200);
   }
 }
 </script>

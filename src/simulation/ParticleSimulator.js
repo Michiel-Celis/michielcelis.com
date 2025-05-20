@@ -19,7 +19,10 @@ import {
 // Import quantum mechanics functions
 import {
     getQuantizedRadius,
-    updateConstants
+    updateConstants,
+    createQuantizedElectronOrbitWithExclusion,
+    applyQuantumExclusionConstraints,
+    getElectronicConfiguration
 } from './QuantumMechanics.js';
 
 // Import camera and rendering engine
@@ -29,11 +32,13 @@ import { Camera, Renderer } from './CameraRenderer.js';
 const SIM_SETTINGS = {
     // Quantum mechanics parameters
     quantumOrbits: true,           // Enable/disable quantized electron orbits
+    pauliExclusion: true,          // Enable/disable Pauli exclusion principle
     bohrRadius: 40,                // Base Bohr radius (a₀) scaled for visualization
     planckConstant: 10,            // Scaled Planck's constant (ħ)
     quantumRestoringStrength: 0.05, // Strength of force restoring electrons to quantized orbits
     maxQuantumNumber: 4,           // Maximum principal quantum number to use
     debugQuantumOrbits: false,     // Enable visual debugging of quantum shells
+    showElectronicConfig: false,   // Show electronic configuration display
     
     // Physics
     dt: 0.001,                     // time step (seconds)
@@ -424,37 +429,29 @@ document.addEventListener('keydown', e => {
     // Press 'D' to toggle debug quantum orbit visualization
     if (e.key.toLowerCase() === 'd') {
         SIM_SETTINGS.debugQuantumOrbits = !SIM_SETTINGS.debugQuantumOrbits;
+        console.log(`Debug quantum orbit visualization: ${SIM_SETTINGS.debugQuantumOrbits ? 'ON' : 'OFF'}`);
+    }
+    
+    // Press 'E' to toggle electronic configuration display 
+    if (e.key.toLowerCase() === 'e') {
+        SIM_SETTINGS.showElectronicConfig = !SIM_SETTINGS.showElectronicConfig;
+        console.log(`Electronic configuration display: ${SIM_SETTINGS.showElectronicConfig ? 'ON' : 'OFF'}`);
         
-        // Show/hide visualization elements
-        if (!SIM_SETTINGS.debugQuantumOrbits && window.quantumShellElements) {
-            window.quantumShellElements.forEach(el => {
-                el.style.display = 'none';
-            });
+        if (SIM_SETTINGS.showElectronicConfig) {
+            // Find atoms and show their electronic configuration
+            const protons = particles.filter(p => p.name === 'proton');
+            
+            for (const proton of protons) {
+                // Only display for protons that have bound electrons
+                const boundElectrons = particles.filter(p => 
+                    p.name === 'electron' && p.orbiting && p.orbiting.id === proton.id);
+                
+                if (boundElectrons.length > 0) {
+                    const config = getElectronicConfiguration(proton.id);
+                    console.log(`Atom #${proton.id}: ${config}`);
+                }
+            }
         }
-        
-        // Show notification
-        const debugStatus = SIM_SETTINGS.debugQuantumOrbits ? 'enabled' : 'disabled';
-        const notificationDiv = document.createElement('div');
-        notificationDiv.textContent = `Quantum shell visualization ${debugStatus}`;
-        notificationDiv.style.position = 'absolute';
-        notificationDiv.style.top = '20px';
-        notificationDiv.style.left = '50%';
-        notificationDiv.style.transform = 'translateX(-50%)';
-        notificationDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-        notificationDiv.style.color = 'white';
-        notificationDiv.style.padding = '8px 12px';
-        notificationDiv.style.borderRadius = '4px';
-        notificationDiv.style.fontFamily = 'sans-serif';
-        notificationDiv.style.fontSize = '14px';
-        notificationDiv.style.zIndex = '1001';
-        notificationDiv.style.transition = 'opacity 0.5s';
-        document.body.appendChild(notificationDiv);
-        
-        // Remove notification after a delay
-        setTimeout(() => {
-            notificationDiv.style.opacity = '0';
-            setTimeout(() => notificationDiv.remove(), 500);
-        }, 2000);
     }
 });
 
@@ -473,14 +470,15 @@ function addControlsIndicator() {
     instructionsDiv.style.borderRadius = '5px';
     instructionsDiv.style.zIndex = '1000';
     instructionsDiv.style.pointerEvents = 'none';
-    instructionsDiv.style.userSelect = 'none';
-    instructionsDiv.innerHTML = `
+    instructionsDiv.style.userSelect = 'none';    instructionsDiv.innerHTML = `
         <div><b>Mouse</b>: Drag to rotate, Wheel to zoom</div>
         <div><b>Click</b>: Particle explosion</div>
         <div><b>Right-Click</b>: Create black hole</div>
         <div><b>A</b>: Create complex atom</div>
         <div><b>D</b>: Toggle quantum shell visualization</div>
-        <div style="margin-top:8px"><b>Electron Shells</b>: Using Bohr's quantized orbits</div>
+        <div><b>E</b>: Show electronic configuration</div>
+        <div style="margin-top:8px"><b>Electron Shells</b>: Using Pauli Exclusion Principle</div>
+        <div style="font-size:12px">Aufbau filling: 1s², 2s², 2p⁶, 3s², 3p⁶, 4s²...</div>
         <div><b>Shell Colors</b>: n=1 (bright blue) → n=4 (pale blue)</div>
     `;
     document.body.appendChild(instructionsDiv);
@@ -536,10 +534,38 @@ function visualizeQuantumShells() {
             window.quantumShellElements.push(shellEl);
         }
     }
-    
-    // Find a proton to visualize shells around
+  // Find a proton to visualize shells around
     const centralProton = particles.find(p => p.name === 'proton' && p.hasElectron);
-    if (!centralProton) return;
+    if (!centralProton) {
+        return;
+    }
+    
+    // Display electronic configuration if enabled
+    if (SIM_SETTINGS.showElectronicConfig && centralProton) {
+        // Create or update electronic configuration display
+        if (!window.electronicConfigEl) {
+            window.electronicConfigEl = document.createElement('div');
+            window.electronicConfigEl.className = 'electronic-config';
+            window.electronicConfigEl.style.position = 'absolute';
+            window.electronicConfigEl.style.bottom = '20px';
+            window.electronicConfigEl.style.left = '20px';
+            window.electronicConfigEl.style.color = 'white';
+            window.electronicConfigEl.style.fontFamily = 'monospace';
+            window.electronicConfigEl.style.fontSize = '14px';
+            window.electronicConfigEl.style.padding = '10px';
+            window.electronicConfigEl.style.background = 'rgba(0, 0, 0, 0.7)';
+            window.electronicConfigEl.style.borderRadius = '5px';
+            window.electronicConfigEl.style.zIndex = '1000';
+            document.body.appendChild(window.electronicConfigEl);
+        }
+        
+        // Update configuration text
+        const config = getElectronicConfiguration(centralProton.id);
+        window.electronicConfigEl.textContent = `Electronic Configuration: ${config}`;
+        window.electronicConfigEl.style.display = '';
+    } else if (window.electronicConfigEl) {
+        window.electronicConfigEl.style.display = 'none';
+    }
     
     // Get camera for projection
     const camPos = camera.getPosition();
@@ -584,8 +610,7 @@ function visualizeQuantumShells() {
         shellEl.style.display = '';
         shellEl.style.width = `${shellSize}px`;
         shellEl.style.height = `${shellSize}px`;
-        shellEl.style.transform = `translate(${projCenter.x - projRadius}px, ${projCenter.y - projRadius}px)`;
-    }
+        shellEl.style.transform = `translate(${projCenter.x - projRadius}px, ${projCenter.y - projRadius}px)`;    }
 }
 
 update();

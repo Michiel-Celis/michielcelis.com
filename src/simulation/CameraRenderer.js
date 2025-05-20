@@ -7,7 +7,8 @@ import { dot, cross, normalize } from './ParticlePhysics.js';
 // Camera state class
 class Camera {
     constructor(settings) {
-        this.rot = { x: 0, y: 0, z: 0 };          // pitch, yaw, roll
+        // Initialize with a slight angle to create a more dynamic view
+        this.rot = { x: 0.2, y: 0.3, z: 0 };    // pitch, yaw, roll
         this.dist = settings.initialDist;         // fixed distance from origin
         this.focus = settings.initialFocus;       // focal plane
         this.minFocus = settings.minFocus;
@@ -96,9 +97,7 @@ class Renderer {
             this.width = window.innerWidth;
             this.height = window.innerHeight;
         });
-    }
-
-    // Project a 3D point to 2D screen space
+    }    // Project a 3D point to 2D screen space
     project(pt, basis, camPos, focalLength) {
         const rel = {
             x: pt.x - camPos.x,
@@ -110,12 +109,15 @@ class Renderer {
         const yCam = dot(basis.up, rel);
         const zCam = dot(basis.forward, rel);
         
+        // Safety check - if camera can't see the point, return null
         if (zCam <= this.settings.nearClip) {
             return null;
         }
         
+        // Convert 3D to 2D with perspective projection
         const scale = focalLength / zCam;
         
+        // Return screen coordinates (centered)
         return {
             x: this.width / 2 + xCam * scale,
             y: this.height / 2 - yCam * scale,

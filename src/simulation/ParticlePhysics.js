@@ -9,6 +9,8 @@ import {
     getNearestQuantumNumber,
     applyQuantumConstraints,
     createQuantizedElectronOrbit,
+    createQuantizedElectronOrbitWithExclusion,
+    applyQuantumExclusionConstraints,
     updateConstants
 } from './QuantumMechanics.js';
 
@@ -178,19 +180,58 @@ function randomVelocityVector(magnitude) {
 
 // Create particle-proton binding with quantized (Bohr-style) orbits
 function createElectronOrbit(electron, proton, settings, quantumNumber = null) {
-    // Use the quantum mechanics module to create a quantized electron orbit
-    const orbit = createQuantizedElectronOrbit(electron, proton, settings, quantumNumber);
-    
-    // Store the quantum state in the electron object
-    electron.quantumNumber = orbit.quantumNumber;
-    electron.quantumRadius = orbit.radius;
-    
-    // Return the velocity components
-    return {
-        vx: orbit.vx,
-        vy: orbit.vy,
-        vz: orbit.vz
-    };
+    if (settings.pauliExclusion) {
+        // Use the enhanced quantum mechanics module with Pauli exclusion
+        const orbit = createQuantizedElectronOrbitWithExclusion(electron, proton, settings);
+        
+        // Store the quantum state in the electron object
+        electron.quantumState = orbit.quantumState;
+        electron.orbitalProps = orbit.orbitalProps;
+        electron.orbiting = proton;
+        
+        // Calculate velocity components from orbital properties
+        const speed = orbit.orbitalProps.speed;
+        const radius = orbit.orbitalProps.radius;
+        const inclination = orbit.orbitalProps.inclination;
+        const phaseOffset = orbit.orbitalProps.phaseOffset;
+        
+        // Random orbit orientation
+        const orbitAngle = Math.random() * Math.PI * 2;
+        
+        // Calculate initial position in the orbital plane
+        const orbitX = radius * Math.cos(orbitAngle + phaseOffset);
+        const orbitY = radius * Math.sin(orbitAngle + phaseOffset);
+        
+        // Apply inclination (rotate around x-axis)
+        const yFinal = orbitY * Math.cos(inclination);
+        const zFinal = orbitY * Math.sin(inclination);
+        
+        // Position the electron
+        electron.x = proton.x + orbitX;
+        electron.y = proton.y + yFinal;
+        electron.z = proton.z + zFinal;
+        
+        // Calculate velocity perpendicular to radius vector
+        const vx = -speed * Math.sin(orbitAngle + phaseOffset);
+        const vy = speed * Math.cos(orbitAngle + phaseOffset) * Math.cos(inclination);
+        const vz = speed * Math.cos(orbitAngle + phaseOffset) * Math.sin(inclination);
+        
+        return { vx, vy, vz };
+    } else {
+        // Use the simple quantum mechanics module without Pauli exclusion
+        const orbit = createQuantizedElectronOrbit(electron, proton, settings, quantumNumber);
+        
+        // Store the quantum state in the electron object
+        electron.quantumNumber = orbit.quantumNumber;
+        electron.quantumRadius = orbit.radius;
+        
+        // Return the velocity components
+        return {
+            vx: orbit.vx,
+            vy: orbit.vy,
+            vz: orbit.vz
+        };
+    }
 }
 
 // Create proton-neutron binding
@@ -366,7 +407,7 @@ function calculateAcceleration(particle, particles, blackHoles, grid, settings, 
 // Apply physics update to all particles using Velocity-Verlet integration
 function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
     const {
-        dt, emConst, weakDecayRate, ongoingEntropy, ongoingZEntropy
+        dt, emConst, weakDecayRate, ongoingEntropy, ongoingZEntropy, pauliExclusion
     } = settings;
     
     // Update constants in the quantum mechanics module
@@ -480,15 +521,21 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
             a.vx += quantumCorrections.velocityCorrection.x;
             a.vy += quantumCorrections.velocityCorrection.y;
             a.vz += quantumCorrections.velocityCorrection.z;
-            
-            // Update electron's quantum properties
+              // Update electron's quantum properties
             a.quantumNumber = quantumCorrections.quantumNumber;
             a.quantumRadius = getQuantizedRadius(a.quantumNumber);
             
-            // Visual feedback - change color based on the quantum number
-            // This makes it easy to see when electrons are in different shells
-            const shellColors = ['#00ffff', '#40a0ff', '#80c0ff', '#a0d0ff'];
-            const shellColor = shellColors[Math.min(a.quantumNumber - 1, shellColors.length - 1)] || 'cyan';
+            // Visual feedback - change color based on the quantum number or state
+            let shellColor;
+            
+            if (settings.pauliExclusion && a.quantumState) {
+                // Use the color from the quantum state
+                shellColor = a.shellColor || '#00ffff';
+            } else {
+                // Fallback to simple coloring based on quantum number
+                const shellColors = ['#00ffff', '#40a0ff', '#80c0ff', '#a0d0ff'];
+                shellColor = shellColors[Math.min(a.quantumNumber - 1, shellColors.length - 1)] || 'cyan';
+            }
             
             // Only update color if it's changed
             if (a.orbitColor !== shellColor) {
@@ -496,10 +543,21 @@ function updateParticlePhysics(particles, blackHoles, settings, WRAP_DISTANCE) {
                 a.el.style.background = shellColor;
                 
                 // Adjust glow intensity based on quantum number
-                const glowIntensity = 8 - Math.min(a.quantumNumber, 4);
+                const n = a.quantumState ? a.quantumState.n : (a.quantumNumber || 1);
+                const glowIntensity = 8 - Math.min(n, 4);
                 a.el.style.boxShadow = `0 0 ${glowIntensity}px ${shellColor}`;
             }
         }
+    }
+
+    // Apply Pauli exclusion principle if enabled
+    if (pauliExclusion) {
+        // Extract electrons and protons
+        const electrons = particles.filter(p => p.name === 'electron');
+        const protons = particles.filter(p => p.name === 'proton');
+        
+        // Apply quantum exclusion constraints
+        applyQuantumExclusionConstraints(electrons, protons, settings);
     }
 
     return { particles, blackHoles };

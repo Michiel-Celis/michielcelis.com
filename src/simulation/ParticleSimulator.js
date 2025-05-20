@@ -33,7 +33,7 @@ const SIM_SETTINGS = {
     // Quantum mechanics parameters
     quantumOrbits: true,           // Enable/disable quantized electron orbits
     pauliExclusion: true,          // Enable/disable Pauli exclusion principle
-    bohrRadius: 40,                // Base Bohr radius (a₀) scaled for visualization
+    bohrRadius: 5,                // Base Bohr radius (a₀) scaled for visualization
     planckConstant: 10,            // Scaled Planck's constant (ħ)
     quantumRestoringStrength: 0.05, // Strength of force restoring electrons to quantized orbits
     maxQuantumNumber: 4,           // Maximum principal quantum number to use
@@ -42,8 +42,8 @@ const SIM_SETTINGS = {
     
     // Physics
     dt: 0.001,                     // time step (seconds)
-    emConst: 15000,                // Coulomb constant (increased for stronger attraction)
-    speedOfLight: 300,             // c in simulation units
+    emConst: 150000,                // Coulomb constant (increased for stronger attraction)
+    speedOfLight: 30,             // c in simulation units
     
     // Nuclear potential parameters (Woods-Saxon)
     nuclearPotentialDepth: 50,     // Depth of nuclear potential well (V0)
@@ -56,19 +56,19 @@ const SIM_SETTINGS = {
     exclusionRepulsion: 2,         // exclusion repulsion strength
     bindingDistance: 15,           // reference distance for nucleons
     cellSize: 100,                 // spatial hashing cell size
-    friction: 0.9999,              // velocity damping (very small to maintain momentum)
-    initialEntropy: 500,           // initial random velocity (reduced for better orbital formation)
-    ongoingEntropy: 5,             // per-frame jitter velocity (greatly reduced for orbital stability)
+    friction: 0.1,              // velocity damping (very small to maintain momentum)
+    initialEntropy: 5,           // initial random velocity (reduced for better orbital formation)
+    ongoingEntropy: 1,             // per-frame jitter velocity (greatly reduced for orbital stability)
     ongoingZEntropy: 0.05,         // per-frame jitter vz (minimal for orbital stability)
     explosionStrength: 500,        // click explosion strength
     orbitCaptureZ: 0.25,           // Z threshold for binding (electrons)
     bhGravity: 50000,              // black-hole gravitational G
     bhLifetime: 3,                 // black-hole lifespan (s)
-    electronOrbitScale: 3.0,       // increased for better orbit visibility
+    electronOrbitScale: 5.0,       // increased for better orbit visibility
     scaleFactor: 2.0,              // zoom: larger = closer/larger
 
     // Particles
-    ElectronAmount: 40,            // initial electron count (slightly reduced for clearer orbits)
+    ElectronAmount: 25,            // initial electron count (slightly reduced for clearer orbits)
     ElectronSize: 4,               // electron size in pixels (increased for visibility)
     ProtonAmount: 25,              // initial proton count
     ProtonSize: 9,                 // proton size in pixels 

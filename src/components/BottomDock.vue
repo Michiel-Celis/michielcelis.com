@@ -1,5 +1,8 @@
 <template>
   <div class="bottom-dock-container">
+    <div class="alert" :class="{ show: activeAlert }" v-if="activeAlert">
+      {{ activeAlert }}
+    </div>
     <div class="dock-wrapper" :class="{ 'panel-open': isPanelOpen }">
       <div class="sliding-container">
         <!-- Bottom Dock Navigation -->
@@ -123,18 +126,33 @@
                   Certificates
                 </button>
               </div>
-            </div>
-
-            <!-- Info Panel -->
+            </div>            <!-- Info Panel -->
             <div v-if="activeTab === 'info'" class="panel-content info-panel">
-              <p>This interactive particle simulation was created as a demonstration of emergent behavior in complex systems. The simulation uses principles of physics to model interactions between different types of particles.</p>
+              <div class="info-content" ref="infoContent" v-html="parsedContent"></div>
               
-              <div class="info-links">
-                <a href="#" @click.prevent="showLicense" class="info-link">License Information</a>
-                <a href="#" @click.prevent="showDisclaimer" class="info-link">Legal Disclaimer</a>
+              <div class="info-buttons">
+                <button 
+                  class="info-button" 
+                  :class="{ active: activeInfoSection === 'general' }"
+                  @click="activeInfoSection = 'general'"
+                >
+                  General Information
+                </button>
+                <button 
+                  class="info-button" 
+                  :class="{ active: activeInfoSection === 'license' }"
+                  @click="activeInfoSection = 'license'"
+                >
+                  License Information
+                </button>
+                <button 
+                  class="info-button" 
+                  :class="{ active: activeInfoSection === 'disclaimer' }"
+                  @click="activeInfoSection = 'disclaimer'"
+                >
+                  Legal Disclaimer
+                </button>
               </div>
-              
-              <p class="copyright">© 2025 Michiel Celis. All rights reserved.</p>
             </div>
           </div>   
         </div>
@@ -144,6 +162,14 @@
 
 <script>
 import { sendChatMessage, formatChatHistory, initConversation } from '../services/openai';
+import { marked } from 'marked';
+
+// Configure marked to handle GitHub Flavored Markdown
+marked.setOptions({
+  gfm: true,
+  breaks: true,
+  headerIds: false
+});
 
 export default {
   name: 'BottomDock',
@@ -164,14 +190,19 @@ export default {
       ],
       newMessage: '',
       downloadLinks: {
-        resume: '/downloads/resume.pdf',
-        portfolio: '/downloads/portfolio.pdf',
-        projects: '/downloads/projects.pdf',
-        certificates: '/downloads/certificates.pdf'
+        resume: '/downloads/Resume - Michiel Celis.pdf',
+        portfolio: null,
+        projects: null,
+        certificates: null
       },
       isTyping: false,
       aiConversation: [],
-      panelHeight: 300 // Default panel height
+      panelHeight: 300, // Default panel height
+      activeAlert: null,
+      activeInfoSection: 'general',
+      generalInfo: '',
+      licenseInfo: '',
+      disclaimerInfo: ''
     };
   },
   computed: {
@@ -182,7 +213,28 @@ export default {
         case 'downloads':
           return 'Downloads';
         case 'info':
-          return 'Information';
+          switch (this.activeInfoSection) {
+            case 'general':
+              return 'General Information';
+            case 'license':
+              return 'License Information';
+            case 'disclaimer':
+              return 'Legal Disclaimer';
+            default:
+              return 'Information';
+          }
+        default:
+          return '';
+      }
+    },
+    parsedContent() {
+      switch (this.activeInfoSection) {
+        case 'general':
+          return marked(this.generalInfo);
+        case 'license':
+          return marked(this.licenseInfo);
+        case 'disclaimer':
+          return marked(this.disclaimerInfo);
         default:
           return '';
       }
@@ -299,27 +351,21 @@ export default {
       });
     },
     downloadFile(type) {
-      const link = document.createElement('a');
-      link.href = this.downloadLinks[type];
-      link.download = `${type}.pdf`;
-      link.click();
-      
-      // Add a notification to chat if chat tab is active
-      if (this.activeTab === 'chat') {
-        this.chatMessages.push({
-          type: 'system',
-          text: `Download started: ${type}.pdf`,
-          time: this.formatTime(new Date()),
-          isNotification: true
-        });
-        this.scrollToBottom();
+      if (this.downloadLinks[type]) {
+        const link = document.createElement('a');
+        link.href = this.downloadLinks[type];
+        link.target = '_blank'; // Open in new tab
+        link.rel = 'noopener noreferrer'; // Security best practice for new tab links
+        link.click();
+      } else {
+        this.showAlert('Available soon');
       }
     },
-    showLicense() {
-      alert('License Information: This software is licensed under the MIT License.');
-    },
-    showDisclaimer() {
-      alert('Legal Disclaimer: This software is provided "as is" without warranty of any kind.');
+    showAlert(message) {
+      this.activeAlert = message;
+      setTimeout(() => {
+        this.activeAlert = null;
+      }, 3000); // Hide after 3 seconds
     },
     async checkServerHealth() {
       try {
@@ -410,9 +456,23 @@ export default {
       document.removeEventListener('mousemove', this.doDrag);
       document.removeEventListener('mouseup', this.stopDragging);
       document.body.style.userSelect = '';
-    }
+    },
+    async fetchInfoContent() {
+      try {
+        const generalResponse = await fetch('/GENERAL');
+        const licenseResponse = await fetch('/LICENSE');
+        const disclaimerResponse = await fetch('/DISCLAIMER');
+        
+        this.generalInfo = await generalResponse.text();
+        this.licenseInfo = await licenseResponse.text();
+        this.disclaimerInfo = await disclaimerResponse.text();
+      } catch (error) {
+        console.error('Error fetching info content:', error);
+      }
+    },
   },  mounted() {
-    // Initial welcome message is already set in data
+    // Fetch the content of the info files
+    this.fetchInfoContent();
     
     // Initialize conversation with system message
     this.aiConversation = [
@@ -433,6 +493,31 @@ export default {
   width: 100%;
   z-index: 1000;
   font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+/* Alert Styles */
+.alert {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  padding: 12px 16px;
+  background: rgba(40, 40, 40, 0.8);
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  border-radius: 4px;
+  font-size: 13px;
+  transform: translateY(-100%);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.33, 1, 0.68, 1);
+  z-index: 2000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.alert.show {
+  transform: translateY(0);
+  opacity: 1;
 }
 
 /* Container structure for smooth sliding */
@@ -859,143 +944,111 @@ export default {
   line-height: 1.6;
   padding: 15px 0;
   width: 100%;
-}
-
-.info-links {
-  display: flex;
-  gap: 20px;
-  margin: 20px 0;
-}
-
-.info-link {
-  color: #0078d4;
-  text-decoration: none;
-  padding-bottom: 2px;
-  border-bottom: 1px solid transparent;
-  transition: border-color 0.2s;
-}
-
-.info-link:hover {
-  border-bottom-color: #0078d4;
-}
-
-.copyright {
-  margin-top: 20px;
-  opacity: 0.7;
-  font-size: 11px;
-}
-
-/* Panel Transitions */
-.bottom-panel {
+  height: calc(100% - 50px);
   display: flex;
   flex-direction: column;
-  align-items: center;
-  visibility: visible;
+  gap: 20px;
 }
 
-.dock-wrapper:not(.panel-open) .bottom-panel {
-  visibility: hidden;
-  pointer-events: none;
+.info-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 16px 24px 24px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  margin: 0 16px;
+  scrollbar-width: 8px;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
-/* Panel specific heights */
-.bottom-panel.chat {
-  min-height: 300px;
-  transition: min-height 0.3s ease;
-}
-
-.bottom-panel.downloads {
-  min-height: 200px;
-}
-
-.bottom-panel.info {
-  min-height: 180px;
-}
-
-/* Animation styles removed as we're using sliding-container animation */
-
-/* Media queries for responsive design */
-@media (max-width: 768px) {
-  .panel-content,
-  .panel-header {
-    max-width: 100%;
-    padding-left: 10px;
-    padding-right: 10px;
-  }
-  
-  .download-buttons {
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  }
-}
-
-@media (max-width: 480px) {
-  .bottom-panel {
-    max-height: 70vh;
-  }
-  
-  .download-buttons {
-    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-    gap: 10px;
-  }
-  
-  .dock-icons {
-    gap: 10px;
-  }
-  
-  .dock-icon {
-    width: 36px;
-    height: 36px;
-  }
-}
-
-.message.system.isError {
-  background-color: rgba(255, 70, 70, 0.3);
-  border-left: 3px solid #ff4646;
+/* Heading Styles */
+.info-content :deep(h1) {
+  font-size: 1.8em;
+  margin: 0.4em 0;
+  color: rgba(255, 255, 255, 0.95);
   font-weight: 500;
 }
 
-.icon-button.health-check {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: rgba(255, 255, 255, 0.6);
-  padding: 5px;
-  margin-right: 5px;
-  border-radius: 4px;
+.info-content :deep(h2) {
+  font-size: 1.4em;
+  margin: 0.8em 0 0.4em 0;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+}
+
+.info-content :deep(h3) {
+  font-size: 1.2em;
+  margin: 0.6em 0 0.3em 0;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
+}
+
+.info-content :deep(p) {
+  margin: 0.5em 0;
+  line-height: 1.6;
+  white-space: normal;
+}
+
+.info-content :deep(ul), .info-content :deep(ol) {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.info-content :deep(li) {
+  margin: 0.3em 0;
+  white-space: normal;
+}
+.info-content::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  background: transparent;
+}
+
+.info-content::-webkit-scrollbar-track {
+  background: transparent;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.info-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0;
+}
+
+.info-buttons {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
+  gap: 10px;
+  padding: 0 16px;
+  margin-top: auto;
 }
 
-.icon-button.health-check:hover {
-  color: #ffffff;
-  background-color: rgba(255, 255, 255, 0.1);
+.info-button {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
-/* Drag Handle */
-.panel-drag-handle {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  transform: translateY(-50%);
-  cursor: ns-resize;
-  background-color: transparent;
-  transition: background-color 0.2s;
-  z-index: 1001;
+.info-button:hover {
+  background: rgba(0, 120, 212, 0.2);
+  border-color: rgba(0, 120, 212, 0.3);
 }
 
-.panel-drag-handle:hover {
-  background-color: rgba(0, 120, 212, 0.5);
+.info-button.active {
+  background: rgba(0, 120, 212, 0.2);
+  border-color: rgba(0, 120, 212, 0.5);
+  color: #0078d4;
 }
 
-/* Removed the previous .panel-drag-handle styles as they are now merged */
-
-/* Adjusted .bottom-panel for drag handle */
-.bottom-panel {
-  position: relative;
-  /* existing styles... */
+/* Remove old info styles */
+.info-links, .copyright {
+  display: none;
 }
 </style>

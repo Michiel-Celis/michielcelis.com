@@ -11,7 +11,9 @@ import {
     createNucleonBinding,
     updateParticlePhysics,
     createExplosion,
-    createComplexAtom
+    createComplexAtom,
+    computePotential,
+    computeForcePair
 } from './ParticlePhysics.js';
 
 // Import camera and rendering engine
@@ -20,17 +22,20 @@ import { Camera, Renderer } from './CameraRenderer.js';
 // === SIMULATION SETTINGS & CONFIGURATION ===
 const SIM_SETTINGS = {
     // Physics
-    dt: 0.001,                    // time step (seconds)
-    emConst: 15000,               // Coulomb constant (increased for stronger attraction)
+    dt: 0.001,                     // time step (seconds)
+    emConst: 15000,                // Coulomb constant (increased for stronger attraction)
     speedOfLight: 300,             // c in simulation units
-    nuclearYukawaStrength: 25000,  // Yukawa attractive strength for nuclear binding
-    nuclearYukawaMu: 0.2,          // Yukawa range parameter
-    nuclearRepulsionA: 1e6,        // repulsive-core constant
+    
+    // Nuclear potential parameters (Woods-Saxon)
+    nuclearPotentialDepth: 50,     // Depth of nuclear potential well (V0)
+    nuclearPotentialRange: 15,     // Nuclear range parameter (R)
+    nuclearPotentialDiffuseness: 2, // Nuclear diffuseness parameter (a)
+    
+    // Particle interaction parameters
     weakDecayRate: 0.00001,        // neutron decay probability per update
     exclusionRadius: 25,           // Pauli exclusion radius
     exclusionRepulsion: 2,         // exclusion repulsion strength
-    bindingDistance: 15,           // binding distance for nucleons (reduced for tighter nuclei)
-    bindingSpringK: 15,            // spring constant for bound particles
+    bindingDistance: 15,           // reference distance for nucleons
     cellSize: 100,                 // spatial hashing cell size
     friction: 0.9999,              // velocity damping (very small to maintain momentum)
     initialEntropy: 500,           // initial random velocity (reduced for better orbital formation)
@@ -44,11 +49,11 @@ const SIM_SETTINGS = {
     scaleFactor: 2.0,              // zoom: larger = closer/larger
 
     // Particles
-    ElectronAmount: 80,            // initial electron count (slightly reduced for clearer orbits)
+    ElectronAmount: 40,            // initial electron count (slightly reduced for clearer orbits)
     ElectronSize: 4,               // electron size in pixels (increased for visibility)
-    ProtonAmount: 50,              // initial proton count
+    ProtonAmount: 25,              // initial proton count
     ProtonSize: 9,                 // proton size in pixels 
-    NeutronAmount: 50,             // initial neutron count
+    NeutronAmount: 25,             // initial neutron count
     NeutronSize: 9,                // neutron size in pixels
 
     // Camera & Rendering
@@ -65,7 +70,7 @@ const SIM_SETTINGS = {
     focalLength: 1000,             // perspective projection focal length
     nearClip: 100,                   // near clipping plane
     farClip: 500000,                 // far clipping plane
-    blurScale: 0.06,              // pixels of blur per unit of focal error
+    blurScale: 0.01,              // pixels of blur per unit of focal error
     maxRenderBlur: 30,              // blur threshold for culling
     focusBlurIntensity: 10.0,       // intensity multiplier for focal blur effect
     focusBlurThreshold: 500,       // threshold distance before blur starts to increase

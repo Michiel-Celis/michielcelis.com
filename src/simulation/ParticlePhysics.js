@@ -23,6 +23,95 @@ function normalize(v) {
     return { x: v.x / l, y: v.y / l, z: v.z / l };
 }
 
+// Compute potential energy between two particles based on their types and distance
+function computePotential(a, b, r, settings) {
+    const {
+        emConst, 
+        nuclearPotentialDepth, 
+        nuclearPotentialRange, 
+        nuclearPotentialDiffuseness,
+        exclusionRadius,
+        exclusionRepulsion
+    } = settings;
+
+    // Coulomb potential: V_C(r) = k * q1 * q2 / r
+    const coulombPotential = emConst * a.charge * b.charge / r;
+
+    // Initialize total potential with Coulomb
+    let totalPotential = coulombPotential;
+
+    // Handle nuclear potentials (Woods-Saxon for proton-neutron interactions)
+    if ((a.name === 'proton' && b.name === 'neutron') ||
+        (a.name === 'neutron' && b.name === 'proton')) {
+        
+        // Woods-Saxon potential: V_WS(r) = -V0 / (1 + exp((r-R)/a))
+        // V0 = depth, R = range, a = diffuseness
+        const woodsSaxonPotential = -nuclearPotentialDepth / 
+            (1 + Math.exp((r - nuclearPotentialRange) / nuclearPotentialDiffuseness));
+        
+        // Add nuclear potential to total
+        totalPotential += woodsSaxonPotential;
+    }
+
+    // Pauli exclusion principle (repulsive core for same-type particles with same spin)
+    if (a.name === b.name && a.spin === b.spin && r < exclusionRadius) {
+        // Short-range repulsive potential to enforce exclusion principle
+        const exclusionPotential = exclusionRepulsion * Math.pow(exclusionRadius / r, 12);
+        totalPotential += exclusionPotential;
+    }
+
+    return totalPotential;
+}
+
+// Calculate force between two particles as the negative gradient of potential
+function computeForcePair(a, b, settings) {
+    // Calculate distance vector from a to b
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dz = b.z - a.z;
+    const r2 = dx * dx + dy * dy + dz * dz;
+    
+    // Avoid division by zero and skip distant particles
+    if (r2 < 0.01 || r2 > 30000) {
+        return { fx: 0, fy: 0, fz: 0 };
+    }
+    
+    const r = Math.sqrt(r2);
+    const ux = dx / r;
+    const uy = dy / r;
+    const uz = dz / r;
+    
+    // Get potential energy at current position
+    const potential = computePotential(a, b, r, settings);
+    
+    // Small delta for numerical differentiation
+    const delta = 0.01;
+    
+    // Get potential energy at slightly different positions for each dimension
+    // to calculate the gradient (central difference approximation)
+    const rx = r + delta;
+    const ry = r + delta;
+    const rz = r + delta;
+    
+    const potentialX = computePotential(a, b, rx, settings);
+    const potentialY = computePotential(a, b, ry, settings);
+    const potentialZ = computePotential(a, b, rz, settings);
+    
+    // Calculate gradient components as (dV/dr) * (dr/dx) where dr/dx = x/r
+    const dVdr = (potentialX - potential) / delta;
+    
+    // The force is the negative gradient of the potential
+    // F = -∇V, and we multiply by the unit vector in each direction
+    const forceMagnitude = -dVdr;
+    
+    // Return force components
+    return {
+        fx: forceMagnitude * ux,
+        fy: forceMagnitude * uy,
+        fz: forceMagnitude * uz
+    };
+}
+
 // Spatial hash builder
 function buildSpatialHash(particles, cellSize) {
     const grid = new Map();
@@ -113,8 +202,9 @@ function createElectronOrbit(electron, proton, settings) {
     uy /= ulen;
     uz /= ulen;
     
-    // Calculate scientifically accurate orbital velocity based on Coulomb force
-    // Using v = sqrt(k*q1*q2/(m*r)) where k is Coulomb constant
+    // Calculate scientifically accurate orbital velocity based on Coulomb potential gradient
+    // For a Coulomb potential V_C(r) = k*q1*q2/r, the orbital velocity is:
+    // v = sqrt(k*q1*q2/(m*r)) where k is Coulomb constant
     const v0 = Math.sqrt(
         settings.emConst * Math.abs(electron.charge * proton.charge) / (electron.mass * dist)
     );
@@ -133,10 +223,12 @@ function createElectronOrbit(electron, proton, settings) {
 
 // Create proton-neutron binding
 function createNucleonBinding(neutron, proton, settings) {
-    // Position neutron at ~0.9×bindingDistance from proton
+    // Position neutron at the nuclear potential minimum defined by nuclearPotentialRange
+    // This is where the Woods-Saxon potential has its minimum, naturally creating the correct binding distance
     const θ = Math.random() * 2 * Math.PI,
           φ = Math.acos(2 * Math.random() - 1),
-          r = settings.bindingDistance * 0.9;
+          // Use the range parameter as the equilibrium distance
+          r = settings.nuclearPotentialRange * 0.95; // Slightly inside minimum for stability
     
     // Calculate position relative to proton
     const relativePos = {
@@ -152,8 +244,7 @@ function createNucleonBinding(neutron, proton, settings) {
         z: proton.z + relativePos.z
     };
     
-    // Calculate orbital velocity
-    // Create a random orbital plane for the nucleons by finding a perpendicular vector
+    // Create a random orbital plane for the nucleons
     
     // Normalize the position vector
     const d = Math.sqrt(relativePos.x*relativePos.x + relativePos.y*relativePos.y + relativePos.z*relativePos.z) || 0.1;
@@ -184,9 +275,10 @@ function createNucleonBinding(neutron, proton, settings) {
     uy /= ulen;
     uz /= ulen;
     
-    // Calculate orbital velocity magnitude based on nuclear binding forces
-    // Use a simplified model with the strong force approximated by settings.bindingSpringK
-    const orbitalVelocityMagnitude = Math.sqrt(settings.bindingSpringK / neutron.mass) * 0.5;
+    // Calculate orbital velocity magnitude based on nuclear potential well
+    // V = -V0 at minimum, so kinetic energy ≈ V0/2 for bound state
+    // v = sqrt(2*E/m) = sqrt(V0/m)
+    const orbitalVelocityMagnitude = Math.sqrt(settings.nuclearPotentialDepth / neutron.mass) * 0.5;
     
     // Calculate tangential velocity vector (cross product of orbital axis and radial vector)
     const vx = (uy * rNorm.z - uz * rNorm.y) * orbitalVelocityMagnitude,
@@ -209,8 +301,6 @@ function createNucleonBinding(neutron, proton, settings) {
 // Calculate acceleration for a particle based on forces
 function calculateAcceleration(particle, particles, blackHoles, grid, settings, accelerations = {}) {
     const {
-        emConst, exclusionRadius, exclusionRepulsion,
-        bindingSpringK, nuclearYukawaStrength, nuclearYukawaMu, nuclearRepulsionA,
         bhGravity, speedOfLight
     } = settings;
 
@@ -219,168 +309,58 @@ function calculateAcceleration(particle, particles, blackHoles, grid, settings, 
           cy = Math.floor(particle.y / settings.cellSize),
           cz = Math.floor(particle.z / settings.cellSize);
 
-    // pairwise forces
+    // pairwise forces using potential-based approach
     for (let ox = -1; ox <= 1; ox++) {
         for (let oy = -1; oy <= 1; oy++) {
             for (let oz = -1; oz <= 1; oz++) {
                 const cell = grid.get(`${cx + ox},${cy + oy},${cz + oz}`);
-                if (!cell) continue;
+                if (!cell) {
+                    continue;
+                }
                 
                 for (const b of cell) {
-                    if (b === particle) continue;
-                    
-                    const dx = b.x - particle.x, 
-                          dy = b.y - particle.y, 
-                          dz = b.z - particle.z,
-                          d2 = dx * dx + dy * dy + dz * dz;
-                          
-                    if (d2 > 30000) continue;
-                    
-                    const d = Math.sqrt(d2) + 0.1,
-                          ux = dx / d, 
-                          uy = dy / d, 
-                          uz = dz / d;
-
-                    // Coulomb force
-                    const fe = -emConst * particle.charge * b.charge / Math.max(d2, 100);
-                    
-                    // Fix for electron-electron interaction: ensure electrons strongly repel each other
-                    // and cannot orbit each other due to same charge
-                    if (particle.name === 'electron' && b.name === 'electron') {
-                        // Increase repulsion between electrons to prevent orbiting
-                        const strongerRepulsion = -emConst * particle.charge * b.charge * 5 / Math.max(d2, 100);
-                        fx += strongerRepulsion * ux;
-                        fy += strongerRepulsion * uy;
-                        fz += strongerRepulsion * uz;
-                    } else {
-                        // Normal Coulomb force for other interactions
-                        fx += fe * ux; 
-                        fy += fe * uy; 
-                        fz += fe * uz;
-                    }
-
-                    // Special handling for electron-proton pairs 
-                    if ((particle.name === 'electron' && b.name === 'proton') ||
-                        (particle.name === 'proton' && b.name === 'electron')) {
-                        // Enhanced stability for electron orbits
-                        // Apply a small corrective force to maintain orbits
-                        if (d > 50 && d < 200) {  // Optimal orbital range
-                            // Apply a slight damping to radial velocity component
-                            const radialVel = particle.vx * ux + particle.vy * uy + particle.vz * uz;
-                            fx -= 0.1 * radialVel * ux;
-                            fy -= 0.1 * radialVel * uy;
-                            fz -= 0.1 * radialVel * uz;
-                            
-                            // Apply a slight boost to maintain orbital velocity if needed
-                            const orbitSpeed = Math.sqrt(
-                                particle.vx * particle.vx + particle.vy * particle.vy + particle.vz * particle.vz - radialVel * radialVel
-                            );
-                            
-                            // If orbital speed is too low, provide a small boost perpendicular to radius
-                            if (orbitSpeed < Math.sqrt(emConst * Math.abs(particle.charge * b.charge) / (particle.mass * d)) * 0.8) {
-                                // Create perpendicular vector for orbital boost
-                                const perpX = particle.vy * uz - particle.vz * uy;
-                                const perpY = particle.vz * ux - particle.vx * uz;
-                                const perpZ = particle.vx * uy - particle.vy * ux;
-                                
-                                // Normalize and apply a small boost
-                                const perpLen = Math.sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ) || 1;
-                                fx += 0.5 * perpX / perpLen;
-                                fy += 0.5 * perpY / perpLen;
-                                fz += 0.5 * perpZ / perpLen;
-                            }
-                        }
+                    if (b === particle) {
+                        continue;
                     }
                     
-                    // Nuclear Yukawa + repulsion
-                    if ((particle.name === 'proton' && b.name === 'neutron') ||
-                        (particle.name === 'neutron' && b.name === 'proton')) {
-                        const expT = Math.exp(-nuclearYukawaMu * d),
-                              Fat = nuclearYukawaStrength * expT * (nuclearYukawaMu * d + 1) / (d * d),
-                              Frep = 12 * nuclearRepulsionA / Math.pow(d, 13),
-                              Fn = Fat - Frep;
+                    // Calculate pairwise force using potential gradient
+                    const force = computeForcePair(particle, b, settings);
+                    
+                    // Accumulate forces
+                    fx += force.fx;
+                    fy += force.fy;
+                    fz += force.fz;
+                    
+                    // Minimal correction for bound particles to maintain stability
+                    // This avoids excessive damping while still providing structural stability
+                    if (particle.boundTo === b || particle.orbiting === b) {
+                        const dx = b.x - particle.x;
+                        const dy = b.y - particle.y;
+                        const dz = b.z - particle.z;
+                        const d2 = dx * dx + dy * dy + dz * dz;
                         
-                        fx += Fn * ux; 
-                        fy += Fn * uy; 
-                        fz += Fn * uz;
-
-                        // Spring + damping if bound
-                        if (particle.boundTo === b) {
-                            // Calculate ideal binding distance (nuclear radius)
-                            const idealDist = settings.bindingDistance;
-                            
-                            // Strengthen the spring when particles get too far apart
-                            const distanceFactor = d > idealDist * 1.5 ? 3.0 : 1.0;
-                            
-                            // Spring force to maintain orbital distance
-                            const sp = -bindingSpringK * (d - idealDist) * distanceFactor;
-                            fx += sp * ux; 
-                            fy += sp * uy; 
-                            fz += sp * uz;
-                            
-                            // Improved orbital dynamics for bound particles
-                            // Calculate radial velocity component
-                            const radialVel = (particle.vx - b.vx) * ux + (particle.vy - b.vy) * uy + (particle.vz - b.vz) * uz;
-                            
-                            // Apply damping to radial velocity to maintain orbit
-                            const Fd = -50 * radialVel;
-                            fx += Fd * ux; 
-                            fy += Fd * uy; 
-                            fz += Fd * uz;
-                            
-                            // Angular velocity stabilization (helps maintain orbital velocity)
-                            // First calculate tangential velocity
-                            const tvx = (particle.vx - b.vx) - radialVel * ux;
-                            const tvy = (particle.vy - b.vy) - radialVel * uy;
-                            const tvz = (particle.vz - b.vz) - radialVel * uz;
-                            const tangentialSpeed = Math.sqrt(tvx*tvx + tvy*tvy + tvz*tvz);
-                            
-
-                            // Target orbital speed based on nuclear binding energy
-                            const targetSpeed = Math.sqrt(bindingSpringK / particle.mass) * 0.5;
-                            
-
-                            // If orbital speed is too different from target, apply correction
-                            if (Math.abs(tangentialSpeed - targetSpeed) > 0.3 * targetSpeed) {
-                                // Normalize tangential velocity
-                                const tnorm = tangentialSpeed > 0.001 ? 
-                                    { x: tvx/tangentialSpeed, y: tvy/tangentialSpeed, z: tvz/tangentialSpeed } : 
-                                    { x: 0, y: 0, z: 0 };
-                                    
-                                // Calculate speed correction
-                                const speedCorrection = 0.1 * (targetSpeed - tangentialSpeed);
-                                
-                                // Apply orbital velocity correction
-                                fx += tnorm.x * speedCorrection;
-                                fy += tnorm.y * speedCorrection;
-                                fz += tnorm.z * speedCorrection;
-                            }
-                            
-                            // Shared nucleus attraction (for particles in the same nucleus)
-                            if (particle.nucleusId !== undefined && b.nucleusId !== undefined && 
-                                particle.nucleusId === b.nucleusId) {
-                                // Apply an additional cohesive force to keep the nucleus together
-                                const nucleusCohesion = 0.5 * bindingSpringK * d;
-                                fx -= nucleusCohesion * ux * 0.1;
-                                fy -= nucleusCohesion * uy * 0.1;
-                                fz -= nucleusCohesion * uz * 0.1;
-                            }
+                        if (d2 > 30000) {
+                            continue;
                         }
-                    }
-
-                    // Pauli exclusion
-                    if (particle.name === b.name && particle.spin === b.spin && d < exclusionRadius) {
-                        const re = exclusionRepulsion / d2;
-                        fx -= re * ux; 
-                        fy -= re * uy; 
-                        fz -= re * uz;
+                        
+                        const d = Math.sqrt(d2);
+                        const ux = dx / d;
+                        const uy = dy / d;
+                        const uz = dz / d;
+                        
+                        // Apply minimal radial velocity damping (reduced from previous implementation)
+                        const radialVel = (particle.vx - b.vx) * ux + (particle.vy - b.vy) * uy + (particle.vz - b.vz) * uz;
+                        const dampingFactor = particle.name === 'electron' ? 0.05 : 0.1;
+                        
+                        // Apply gentle damping only to radial component
+                        fx -= dampingFactor * radialVel * ux;
+                        fy -= dampingFactor * radialVel * uy;
+                        fz -= dampingFactor * radialVel * uz;
                     }
                 }
             }
         }
-    }
-
-    // Black-hole gravity
+    }    // Black-hole gravity
     for (const bh of blackHoles) {
         const dx = bh.x - particle.x, 
               dy = bh.y - particle.y, 
@@ -644,21 +624,18 @@ function createComplexAtom(protons, neutrons, electrons, settings, pos = { x: 0,
         const offset = Math.random() * 10; // Random slight variation in distance
         const theta = Math.random() * 2 * Math.PI;
         const phi = Math.acos(2 * Math.random() - 1);
-        
-        // Position at close distance from center
-        proton.x = centralProton.x + (settings.bindingDistance + offset) * Math.sin(phi) * Math.cos(theta);
-        proton.y = centralProton.y + (settings.bindingDistance + offset) * Math.sin(phi) * Math.sin(theta);
-        proton.z = centralProton.z + (settings.bindingDistance + offset) * Math.cos(phi);
+          // Position at close distance from center
+        proton.x = centralProton.x + (settings.nuclearPotentialRange + offset) * Math.sin(phi) * Math.cos(theta);
+        proton.y = centralProton.y + (settings.nuclearPotentialRange + offset) * Math.sin(phi) * Math.sin(theta);
+        proton.z = centralProton.z + (settings.nuclearPotentialRange + offset) * Math.cos(phi);
         
         // Add to nucleus
         atom.nucleus.push(proton);
-        atom.allParticles.push(proton);
-        
-        // Calculate orbital velocity for nucleus stability
-        const binding = createNucleonBinding(proton, centralProton, settings);
-        proton.vx = binding.vx;
-        proton.vy = binding.vy;
-        proton.vz = binding.vz;
+        atom.allParticles.push(proton);            // Calculate orbital velocity for nucleus stability
+            const binding = createNucleonBinding(proton, centralProton, settings);
+            proton.vx = binding.vx;
+            proton.vy = binding.vy;
+            proton.vz = binding.vz;
     }
     
     // Add neutrons to the nucleus
@@ -773,5 +750,7 @@ export {
     createNucleonBinding,
     updateParticlePhysics,
     createExplosion,
-    createComplexAtom
+    createComplexAtom,
+    computePotential,
+    computeForcePair
 };

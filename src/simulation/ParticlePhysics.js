@@ -41,10 +41,18 @@ function buildSpatialHash(particles, cellSize) {
 
 // Generate random spherical coordinates
 function randomSphericalCoords(minRadius, maxRadius) {
-    const radius = minRadius + Math.random() * (maxRadius - minRadius);
-    const theta = Math.random() * Math.PI * 2; // Random horizontal angle
-    const phi = Math.acos(2 * Math.random() - 1); // Random vertical angle (ensures uniform distribution)
+    // Use a uniform distribution for radius (r³ distribution for volume)
+    const u = Math.random();
+    const r3Min = Math.pow(minRadius, 3);
+    const r3Max = Math.pow(maxRadius, 3);
+    const radius = Math.pow(r3Min + u * (r3Max - r3Min), 1/3);
     
+    // Random horizontal angle (uniform distribution)
+    const theta = Math.random() * Math.PI * 2;
+    
+    // Random vertical angle (ensure uniform distribution on sphere)
+    const phi = Math.acos(2 * Math.random() - 1);
+      // Convert spherical coordinates to Cartesian
     return {
         radius,
         theta,
@@ -578,6 +586,204 @@ function createExplosion(centerParticle, particles, explosionStrength) {
     }
 }
 
+// Create a complex atom with multiple electron shells
+function createComplexAtom(protons, neutrons, electrons, settings, pos = { x: 0, y: 0, z: 0 }) {
+    // Structure to hold all particles in this atom
+    const atom = {
+        nucleus: [],
+        electronShells: [],
+        allParticles: []
+    };
+    
+    // Get necessary particles from the pool
+    const availableProtons = protons.filter(p => !p.boundTo && !p.hasElectron && !p.nucleusId);
+    const availableNeutrons = neutrons.filter(n => !n.boundTo && !n.nucleusId);
+    const availableElectrons = electrons.filter(e => !e.orbiting);
+    
+    // Determine how many particles we can create
+    const nucleonCount = Math.min(availableProtons.length, availableNeutrons.length);
+    
+    // If we don't have enough particles, return empty
+    if (nucleonCount === 0 || availableElectrons.length === 0) {
+        return atom;
+    }
+    
+    // Assign unique atom ID
+    const atomId = Date.now() % 10000;
+    
+    // Define electron shell configurations (based on atomic orbitals)
+    // Format: [shell distance, max electrons in shell]
+    const electronShells = [
+        [120, 2],   // K shell (1s): 2 electrons
+        [180, 8],   // L shell (2s, 2p): 8 electrons
+        [240, 8],   // M shell (partial - just show 8 for visualization)
+        [300, 2]    // N shell (partial - just show 2 for visualization)
+    ];
+    
+    // Calculate how many protons and neutrons to use
+    // Random number between 1 and min(nucleonCount, 10)
+    const numProtons = Math.min(Math.floor(Math.random() * 10) + 1, nucleonCount, 10);
+    // Usually similar number of neutrons, sometimes more for heavier elements
+    const numNeutrons = Math.min(
+        numProtons + Math.floor(Math.random() * 3) - 1,
+        availableNeutrons.length
+    );
+    
+    // Calculate how many electrons to use (neutral atom)
+    const numElectrons = Math.min(
+        numProtons, 
+        availableElectrons.length, 
+        20  // Cap at 20 electrons for performance
+    );
+    
+    // Random position offset if not specified
+    if (!pos.x && !pos.y && !pos.z) {
+        pos = randomSphericalCoords(100, 400);
+    }
+    
+    // 1. Create nucleus
+    // First, place the central proton at the specified position
+    const centralProton = availableProtons[0];
+    centralProton.x = pos.x;
+    centralProton.y = pos.y;
+    centralProton.z = pos.z;
+    centralProton.vx = 0;
+    centralProton.vy = 0;
+    centralProton.vz = 0;
+    centralProton.nucleusId = atomId;
+    centralProton.isAtomCore = true;
+    
+    atom.nucleus.push(centralProton);
+    atom.allParticles.push(centralProton);
+    
+    // Add remaining protons around the central one
+    for (let i = 1; i < numProtons; i++) {
+        const proton = availableProtons[i];
+        
+        // Bind to the central proton
+        proton.boundTo = centralProton;
+        proton.nucleusId = atomId;
+        
+        // Use binding function to position and set velocity
+        const offset = Math.random() * 10; // Random slight variation in distance
+        const theta = Math.random() * 2 * Math.PI;
+        const phi = Math.acos(2 * Math.random() - 1);
+        
+        // Position at close distance from center
+        proton.x = centralProton.x + (settings.bindingDistance + offset) * Math.sin(phi) * Math.cos(theta);
+        proton.y = centralProton.y + (settings.bindingDistance + offset) * Math.sin(phi) * Math.sin(theta);
+        proton.z = centralProton.z + (settings.bindingDistance + offset) * Math.cos(phi);
+        
+        // Add to nucleus
+        atom.nucleus.push(proton);
+        atom.allParticles.push(proton);
+        
+        // Calculate orbital velocity for nucleus stability
+        const binding = createNucleonBinding(proton, centralProton, settings);
+        proton.vx = binding.vx;
+        proton.vy = binding.vy;
+        proton.vz = binding.vz;
+    }
+    
+    // Add neutrons to the nucleus
+    for (let i = 0; i < numNeutrons; i++) {
+        const neutron = availableNeutrons[i];
+        
+        // Bind to a random proton in the nucleus
+        const targetProton = atom.nucleus[Math.floor(Math.random() * atom.nucleus.length)];
+        neutron.boundTo = targetProton;
+        neutron.nucleusId = atomId;
+        
+        // Use binding function to position and set velocity
+        const binding = createNucleonBinding(neutron, targetProton, settings);
+        
+        neutron.x = binding.x;
+        neutron.y = binding.y;
+        neutron.z = binding.z;
+        neutron.vx = binding.vx;
+        neutron.vy = binding.vy;
+        neutron.vz = binding.vz;
+        
+        // Add to nucleus
+        atom.nucleus.push(neutron);
+        atom.allParticles.push(neutron);
+    }
+    
+    // 2. Add electrons in shells
+    let electronIndex = 0;
+    
+    // Loop through each defined shell
+    for (let shellIndex = 0; shellIndex < electronShells.length; shellIndex++) {
+        const [shellDistance, maxElectrons] = electronShells[shellIndex];
+        const shellElectrons = [];
+        
+        // Add electrons to this shell until full or run out
+        const electronsInShell = Math.min(
+            maxElectrons,
+            numElectrons - electronIndex
+        );
+        
+        if (electronsInShell <= 0) {
+            break;
+        }
+        
+        // For each electron in this shell
+        for (let i = 0; i < electronsInShell; i++) {
+            if (electronIndex >= availableElectrons.length) {
+                break;
+            }
+            
+            const electron = availableElectrons[electronIndex++];
+            
+            // Set shell-specific properties
+            electron.shellIndex = shellIndex;
+            electron.shellLevel = shellIndex + 1;  // 1-based shell numbering (K=1, L=2, etc.)
+            electron.atomId = atomId;
+            
+            // Calculate position on sphere (evenly distributed)
+            // Golden spiral distribution for evenly spaced points on a sphere
+            const phi = Math.acos(1 - 2 * (i + 0.5) / electronsInShell);
+            const theta = Math.PI * (1 + Math.sqrt(5)) * (i + 0.5);
+            
+            // Position electron at shell radius from nucleus
+            electron.x = centralProton.x + shellDistance * Math.sin(phi) * Math.cos(theta);
+            electron.y = centralProton.y + shellDistance * Math.sin(phi) * Math.sin(theta);
+            electron.z = centralProton.z + shellDistance * Math.cos(phi);
+            
+            // Create orbital velocity relative to nucleus
+            const orbit = createElectronOrbit(electron, centralProton, settings);
+            
+            // Apply orbital velocity (scaled by shell number for different speeds)
+            const shellSpeedFactor = 1 / Math.sqrt(shellIndex + 1); // Outer shells are slower
+            electron.vx = orbit.vx * shellSpeedFactor;
+            electron.vy = orbit.vy * shellSpeedFactor;
+            electron.vz = orbit.vz * shellSpeedFactor;
+            
+            // Mark electron as orbiting in this atom
+            electron.orbiting = centralProton;
+            
+            // Visual differentiation by shell
+            // Use different colors for different shells
+            const shellColors = ['deepskyblue', '#40a0ff', '#80c0ff', '#a0d0ff'];
+            electron.orbitColor = shellColors[shellIndex] || 'white';
+            electron.el.style.background = electron.orbitColor;
+            
+            // Add glow intensity based on shell
+            const glowIntensity = 10 - shellIndex * 2;
+            electron.el.style.boxShadow = `0 0 ${glowIntensity}px ${electron.orbitColor}`;
+            
+            // Track electrons by shell
+            shellElectrons.push(electron);
+            atom.allParticles.push(electron);
+        }
+        
+        // Add this shell to the atom structure
+        atom.electronShells.push(shellElectrons);
+    }
+    
+    return atom;
+}
+
 // Export functions
 export {
     dot,
@@ -590,5 +796,6 @@ export {
     createElectronOrbit,
     createNucleonBinding,
     updateParticlePhysics,
-    createExplosion
+    createExplosion,
+    createComplexAtom
 };

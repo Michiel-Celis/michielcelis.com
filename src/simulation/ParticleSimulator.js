@@ -10,7 +10,8 @@ import {
     createElectronOrbit,
     createNucleonBinding,
     updateParticlePhysics,
-    createExplosion
+    createExplosion,
+    createComplexAtom
 } from './ParticlePhysics.js';
 
 // Import camera and rendering engine
@@ -19,7 +20,7 @@ import { Camera, Renderer } from './CameraRenderer.js';
 // === SIMULATION SETTINGS & CONFIGURATION ===
 const SIM_SETTINGS = {
     // Physics
-    dt: 0.005,                    // time step (seconds)
+    dt: 0.001,                    // time step (seconds)
     emConst: 15000,               // Coulomb constant (increased for stronger attraction)
     speedOfLight: 300,             // c in simulation units
     nuclearYukawaStrength: 25000,  // Yukawa attractive strength for nuclear binding
@@ -392,11 +393,54 @@ container.addEventListener('wheel', e => {
     camera.adjustFocus(e.deltaY);
 }, { passive: false });
 
-// Create axis elements and add them to the container
+// Keyboard controls for complex atoms and other features
+document.addEventListener('keydown', e => {
+    // Press 'A' to create a complex atom
+    if (e.key.toLowerCase() === 'a') {
+        // Get available particles by type
+        const protons = particles.filter(p => p.name === 'proton');
+        const neutrons = particles.filter(p => p.name === 'neutron');
+        const electrons = particles.filter(p => p.name === 'electron');
+        
+        // Create a complex atom
+        const atom = createComplexAtom(protons, neutrons, electrons, SIM_SETTINGS);
+        
+        // If the atom was created successfully (we have particles)
+        if (atom.allParticles.length > 0) {
+            console.log(`Created complex atom with ${atom.nucleus.length} nucleons and ${atom.electronShells.flat().length} electrons`);
+        }
+    }
+});
+
+// Add visualization indicator for spacebar and A key functions
+function addControlsIndicator() {
+    const instructionsDiv = document.createElement('div');
+    instructionsDiv.className = 'simulation-controls';
+    instructionsDiv.style.position = 'absolute';
+    instructionsDiv.style.bottom = '20px';
+    instructionsDiv.style.left = '20px';
+    instructionsDiv.style.color = 'white';
+    instructionsDiv.style.fontFamily = 'sans-serif';
+    instructionsDiv.style.fontSize = '14px';
+    instructionsDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    instructionsDiv.style.padding = '10px';
+    instructionsDiv.style.borderRadius = '5px';
+    instructionsDiv.style.zIndex = '1000';
+    instructionsDiv.style.pointerEvents = 'none';
+    instructionsDiv.style.userSelect = 'none';
+    instructionsDiv.innerHTML = `
+        <div><b>Mouse</b>: Drag to rotate, Wheel to zoom</div>
+        <div><b>Click</b>: Particle explosion</div>
+        <div><b>Right-Click</b>: Create black hole</div>
+        <div><b>A</b>: Create complex atom</div>
+    `;
+    document.body.appendChild(instructionsDiv);
+}
 
 // Add styling and create DOM elements
 renderer.createParticleElements(particles);
 renderer.createAxisElements(axes);
+addControlsIndicator();
 
 // main loop
 function update() {

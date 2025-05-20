@@ -169,14 +169,18 @@ class AtomicStructure {
             return `${n}${letter}`;
         }
     }
-    
-    /**
+      /**
      * Get the color for a quantum state
      * @param {number} n - Principal quantum number
      * @param {number} l - Azimuthal quantum number
      * @returns {string} - CSS color string
      */
     getShellColor(n, l) {
+        // Return white for all orbital shells to ensure orbiting electrons have white glow
+        return 'white';
+        
+        // Comment out original code that used different colors
+        /*
         const shellName = this.getShellName(n, l);
         if (SHELL_COLORS[shellName]) {
             return SHELL_COLORS[shellName];
@@ -188,6 +192,7 @@ class AtomicStructure {
         const saturation = 100 - (l * 10);
         const lightness = 50;
         return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+        */
     }
     
     /**
@@ -196,8 +201,7 @@ class AtomicStructure {
      * @param {Object} nucleus - The nucleus being orbited
      * @param {Object} settings - Simulation settings
      * @returns {Object} - Orbital properties
-     */
-    calculateOrbitalProperties(electron, nucleus, settings) {
+     */    calculateOrbitalProperties(electron, nucleus, settings) {
         const { n, l, ml, ms } = electron.quantumState;
         
         // Base orbital radius (modified by azimuthal quantum number)
@@ -205,7 +209,8 @@ class AtomicStructure {
         
         // Adjust radius based on azimuthal quantum number (l)
         // Higher l values (p, d, f orbitals) have different angular distributions
-        const radiusMultiplier = 1 + (l * 0.1); // Slight increase for higher l values
+        // Reduced multiplier to bring electrons closer to nucleus
+        const radiusMultiplier = 0.7 + (l * 0.05); // Reduced from 1 + (l * 0.1)
         const radius = baseRadius * radiusMultiplier;
         
         // Speed depends inversely on radius - adjust with quantum numbers

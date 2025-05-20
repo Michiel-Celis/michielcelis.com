@@ -1,52 +1,102 @@
+// Import physics engine functions
+import {
+    dot,
+    cross,
+    length,
+    normalize,
+    buildSpatialHash,
+    randomSphericalCoords,
+    randomVelocityVector,
+    createElectronOrbit,
+    createNucleonBinding,
+    updateParticlePhysics,
+    createExplosion
+} from './ParticlePhysics.js';
+
+// Import camera and rendering engine
+import { Camera, Renderer } from './CameraRenderer.js';
+
 // === SIMULATION SETTINGS & CONFIGURATION ===
 const SIM_SETTINGS = {
-    dt: 0.002,                    // time step (seconds)
-    emConst: 2000,                // Coulomb constant
-    speedOfLight: 300,            // c in simulation units
-    nuclearYukawaStrength: 20000, // Yukawa attractive strength
-    nuclearYukawaMu: 0.2,         // Yukawa range parameter
-    nuclearRepulsionA: 1e6,       // repulsive-core constant
-    weakDecayRate: 0.00001,       // neutron decay probability per update
-    exclusionRadius: 25,          // Pauli exclusion radius
-    exclusionRepulsion: 2,        // exclusion repulsion strength
-    bindingDistance: 20,          // binding distance for nucleons
-    bindingSpringK: 10,           // spring constant for bound particles
-    cellSize: 100,                // spatial hashing cell size
-    friction: 0.95,               // velocity damping
-    initialEntropy: 200,          // initial random velocity (all axes)
-    ongoingEntropy: 200,          // per-frame jitter velocity (all axes)
-    ongoingZEntropy: 1,           // per-frame jitter vz
-    explosionStrength: 500,       // click explosion strength
-    orbitCaptureZ: 0.25,          // Z threshold for binding (electrons)
-    orbitSpeed: { x:Math.PI/15, y:Math.PI/20, z:Math.PI/5 },
-    depthScale: 1500,             // depth→pixel scale
-    nearRenderZ: 0.1,             // min view Z
-    farRenderZ: 15,               // max view Z
-    maxRenderBlur: 2,             // blur threshold
-    bhGravity: 50000,             // black-hole gravitational G
-    bhLifetime: 3,                // black-hole lifespan (s)
+    // Physics
+    dt: 0.005,                    // time step (seconds)
+    emConst: 15000,               // Coulomb constant (increased for stronger attraction)
+    speedOfLight: 300,             // c in simulation units
+    nuclearYukawaStrength: 25000,  // Yukawa attractive strength for nuclear binding
+    nuclearYukawaMu: 0.2,          // Yukawa range parameter
+    nuclearRepulsionA: 1e6,        // repulsive-core constant
+    weakDecayRate: 0.00001,        // neutron decay probability per update
+    exclusionRadius: 25,           // Pauli exclusion radius
+    exclusionRepulsion: 2,         // exclusion repulsion strength
+    bindingDistance: 15,           // binding distance for nucleons (reduced for tighter nuclei)
+    bindingSpringK: 15,            // spring constant for bound particles
+    cellSize: 100,                 // spatial hashing cell size
+    friction: 0.9999,              // velocity damping (very small to maintain momentum)
+    initialEntropy: 500,           // initial random velocity (reduced for better orbital formation)
+    ongoingEntropy: 5,             // per-frame jitter velocity (greatly reduced for orbital stability)
+    ongoingZEntropy: 0.05,         // per-frame jitter vz (minimal for orbital stability)
+    explosionStrength: 500,        // click explosion strength
+    orbitCaptureZ: 0.25,           // Z threshold for binding (electrons)
+    bhGravity: 50000,              // black-hole gravitational G
+    bhLifetime: 3,                 // black-hole lifespan (s)
+    electronOrbitScale: 3.0,       // increased for better orbit visibility
+    scaleFactor: 2.0,              // zoom: larger = closer/larger
 
-    // ← NEW TWEAKS ↓
-    electronOrbitScale: 0.2,      // slow initial electron orbits
-    scaleFactor: 2.0,             // zoom: larger = closer/larger
-    initialFocusZ: 0.4,           // initial camera focus distance
-    minFocusZ: 0.1,               // minimum focus Z (closest zoom)
-    maxFocusZ: 1.0,               // maximum focus Z (furthest zoom)
-    focusZSpeed: 0.05             // speed of focus Z change on scroll
+    // Particles
+    ElectronAmount: 80,            // initial electron count (slightly reduced for clearer orbits)
+    ElectronSize: 4,               // electron size in pixels (increased for visibility)
+    ProtonAmount: 50,              // initial proton count
+    ProtonSize: 9,                 // proton size in pixels 
+    NeutronAmount: 50,             // initial neutron count
+    NeutronSize: 9,                // neutron size in pixels
+
+    // Camera & Rendering
+    initialDist: 600,              // initial camera distance from origin
+    initialFocus: 500,             // initial focal plane
+    minFocus: 100,                 // minimum focus distance
+    maxFocus: 1000,                // maximum focus distance
+    focusSpeed: 10,                // focal plane change speed
+    orbitSpeed: { x: Math.PI/5, y: Math.PI/10, z: Math.PI/20 },
+    dragSpeed: 0.01,              // mouse drag sensitivity
+    slowFactor: 0.95,              // per-frame slowdown when holding Space
+
+      // Projection & DOF
+    focalLength: 1000,             // perspective projection focal length
+    nearClip: 100,                   // near clipping plane
+    farClip: 500000,                 // far clipping plane
+    blurScale: 0.06,              // pixels of blur per unit of focal error
+    maxRenderBlur: 30,              // blur threshold for culling
+    focusBlurIntensity: 10.0,       // intensity multiplier for focal blur effect
+    focusBlurThreshold: 500,       // threshold distance before blur starts to increase
+    nearRenderZ: 0.1,              // min view Z    farRenderZ: 15,                // max view Z
+    depthScale: 5000,              // depth→pixel scale
+    depthDarkeningFactor: 0.8      // How much to darken distant particles (0-1)
 };
 
 // static view constants
-const MAX_Z = 1.5, MIN_Z = 0.2;
+const MAX_Z = 500, MIN_Z = -500;  // Match these with WRAP_DISTANCE for consistent 3D boundaries
 const baseBlur = 0.01, blurScale = 0.5;
 
-// Camera object for view transformations
-const camera = {
-    pos: { x: 0, y: 0, z: SIM_SETTINGS.initialFocusZ },
-    rot: { x: 0, y: 0, z: 0 },
-    minZ: SIM_SETTINGS.minFocusZ,
-    maxZ: SIM_SETTINGS.maxFocusZ,
-    zoomSpeed: SIM_SETTINGS.focusZSpeed
-};
+// World center and wrapping constants
+const WORLD_CENTER_X = innerWidth / 2;
+const WORLD_CENTER_Y = innerHeight / 2;
+const WRAP_DISTANCE = 500; // Distance from center before wrapping
+
+// === XYZ AXES FOR REFERENCE ===
+const axes = [
+    { from: {x:0, y:0, z:0}, to: {x:200, y:0, z:0}, color: 'red' },    // X axis (red)
+    { from: {x:0, y:0, z:0}, to: {x:0, y:200, z:0}, color: 'green' },  // Y axis (green)
+    { from: {x:0, y:0, z:0}, to: {x:0, y:0, z:200}, color: 'blue' }    // Z axis (blue)
+];
+
+// === CAMERA AND RENDERER INITIALIZATION ===
+const camera = new Camera(SIM_SETTINGS);
+const renderer = new Renderer(SIM_SETTINGS, document.querySelector('.container'));
+
+// MOUSE & KEY STATE
+let dragging = false;
+let lastMouse = { x: 0, y: 0 };
+let slowDownActive = false;
 
 // === PARTICLE TYPES & INITIAL COUNTS ===
 const PARTICLE_TYPES = {
@@ -54,13 +104,13 @@ const PARTICLE_TYPES = {
     cyan:  { name:'electron', color:'cyan',  charge:-1, massRange:[0.0005,0.001] },
     black: { name:'neutron',  color:'black', charge:0,  massRange:[1,1.1] }
 };
-const INITIAL_COUNTS = { red:50, cyan:50, black:50 };
+const INITIAL_COUNTS = { red:SIM_SETTINGS.ProtonAmount, cyan:SIM_SETTINGS.ElectronAmount, black:SIM_SETTINGS.NeutronAmount };
 
 // === STATE & INIT ===
 const container = document.querySelector('.container');
+
 const particles = [];
 const blackHoles = [];
-let angles = { x:0, y:0, z:0 };
 
 // create particles
 for (const typeKey in INITIAL_COUNTS) {
@@ -70,19 +120,51 @@ for (const typeKey in INITIAL_COUNTS) {
         el.className = 'firefly';
         el.style.pointerEvents = 'auto';
         el.style.background = type.color;
+        el.style.borderRadius = '50%'; // Ensure particles are perfectly round
+        
+        // Set initial size based on particle type
+        let baseSize;
+        if (type.name === 'electron') {
+            baseSize = SIM_SETTINGS.ElectronSize;
+        } else if (type.name === 'proton') {
+            baseSize = SIM_SETTINGS.ProtonSize;
+        } else { // neutron
+            baseSize = SIM_SETTINGS.NeutronSize;
+        }
+        
+        // Apply exact size in pixels
+        el.style.width = `${baseSize}px`;
+        el.style.height = `${baseSize}px`;
         container.appendChild(el);
 
+        // Generate random position using physics helper
+        // For electrons, create a wider distribution to increase chances of finding protons
+        const position = type.name === 'electron' 
+            ? randomSphericalCoords(150, 450) 
+            : randomSphericalCoords(100, 400);
+        
+        // Generate random velocity using physics helper
+        // Electrons need initial velocity for proper orbital capture
+        // Use higher initial velocity for electrons to ensure they have enough energy for orbits
+        const entropyValue = type.name === 'electron' 
+            ? SIM_SETTINGS.initialEntropy * 1.5 
+            : SIM_SETTINGS.initialEntropy;
+        const velocity = randomVelocityVector(entropyValue);
+        
+        // Position coordinates are relative to world origin (0,0,0)
+        // which will be projected to screen center
         const mass = Math.random() * (type.massRange[1] - type.massRange[0])
                    + type.massRange[0];
+                   
         particles.push({
             el, name:type.name, color:type.color, charge:type.charge,
             spin:type.spin||0, mass,
-            x: Math.random()*window.innerWidth,
-            y: Math.random()*window.innerHeight,
-            z: Math.random()*(MAX_Z - MIN_Z) + MIN_Z,
-            vx:(Math.random()-0.5)*SIM_SETTINGS.initialEntropy,
-            vy:(Math.random()-0.5)*SIM_SETTINGS.initialEntropy,
-            vz:(Math.random()-0.5)*SIM_SETTINGS.initialEntropy,
+            x: position.x,
+            y: position.y,
+            z: position.z,
+            vx: velocity.x,
+            vy: velocity.y,
+            vz: velocity.z,
             boundTo:null
         });
     }
@@ -93,293 +175,244 @@ for (const typeKey in INITIAL_COUNTS) {
     const protons  = particles.filter(p => p.name==='proton');
     const neutrons = particles.filter(p => p.name==='neutron');
     const pairs    = Math.min(protons.length, neutrons.length);
-    const bindCount= Math.floor(pairs*0.5);
-    for (let i=0; i<bindCount; i++){
-        const p = protons.splice(Math.random()*protons.length|0,1)[0];
-        const n = neutrons.splice(Math.random()*neutrons.length|0,1)[0];
-        p.boundTo = n; n.boundTo = p;
+    
+    // Increase binding rate for more interesting nuclear dynamics
+    const bindCount = Math.floor(pairs * 0.7); 
+    
+    // Create arrays to keep track of which particles we've already used
+    const usedProtons = [];
+    const usedNeutrons = [];
+    
+    // First pass: create neutron-proton pairs
+    for (let i=0; i<bindCount; i++) {
+        // Find unused proton
+        let protonIndex;
+        do {
+            protonIndex = Math.floor(Math.random() * protons.length);
+        } while (usedProtons.includes(protonIndex));
+        usedProtons.push(protonIndex);
+        
+        // Find unused neutron
+        let neutronIndex;
+        do {
+            neutronIndex = Math.floor(Math.random() * neutrons.length);
+        } while (usedNeutrons.includes(neutronIndex));
+        usedNeutrons.push(neutronIndex);
+        
+        const p = protons[protonIndex];
+        const n = neutrons[neutronIndex];
+        
+        // Create the binding relationship
+        p.boundTo = n; 
+        n.boundTo = p;
 
-        // position n at ~0.9·bindingDistance
-        const θ = Math.random()*2*Math.PI,
-              φ = Math.acos(2*Math.random()-1),
-              r = SIM_SETTINGS.bindingDistance*0.9;
-        n.x = p.x + r*Math.sin(φ)*Math.cos(θ);
-        n.y = p.y + r*Math.sin(φ)*Math.sin(θ);
-        n.z = p.z + r*Math.cos(φ);
-        n.vx = p.vx; n.vy = p.vy; n.vz = p.vz;
+        // Create binding using physics helper
+        const binding = createNucleonBinding(n, p, SIM_SETTINGS);
+        
+        // Apply new position and velocity
+        n.x = binding.x;
+        n.y = binding.y;
+        n.z = binding.z;
+        n.vx = binding.vx;
+        n.vy = binding.vy;
+        n.vz = binding.vz;
+        
+        // Add a nucleus identifier to help with visualization
+        n.nucleusId = i;
+        p.nucleusId = i;
+    }
+    
+    // Second pass: create larger nuclei by binding additional neutrons to existing pairs
+    if (bindCount > 5) {
+        // Number of larger nuclei to create (with 3 or 4 particles)
+        const largeNucleiCount = Math.min(5, Math.floor(bindCount/5));
+        
+        for (let i=0; i<largeNucleiCount; i++) {
+            // Select a bound proton to attach another neutron to
+            const nucleusId = Math.floor(Math.random() * bindCount);
+            const primaryProton = protons.find(p => p.nucleusId === nucleusId);
+            
+            if (!primaryProton) continue;
+            
+            // Find an unused neutron
+            let neutronIndex;
+            do {
+                neutronIndex = Math.floor(Math.random() * neutrons.length);
+            } while (usedNeutrons.includes(neutronIndex));
+            
+            // If we can't find an unused neutron, skip this iteration
+            if (neutronIndex === undefined) continue;
+            
+            usedNeutrons.push(neutronIndex);
+            const additionalNeutron = neutrons[neutronIndex];
+            
+            // Create a secondary binding to the same proton
+            additionalNeutron.boundTo = primaryProton;
+            
+            // Use binding helper to position and set velocity
+            const binding = createNucleonBinding(additionalNeutron, primaryProton, SIM_SETTINGS);
+            
+            // Apply position and velocity
+            additionalNeutron.x = binding.x;
+            additionalNeutron.y = binding.y;
+            additionalNeutron.z = binding.z;
+            additionalNeutron.vx = binding.vx;
+            additionalNeutron.vy = binding.vy;
+            additionalNeutron.vz = binding.vz;
+            
+            // Add to same nucleus for visualization
+            additionalNeutron.nucleusId = nucleusId;
+        }
     }
 })();
 
 // initial electron–proton orbits
-for (const e of particles) {
-    if (e.name!=='electron') continue;
-    let nearest=null, minD2=Infinity;
-    for (const p of particles) {
-        if (p.name!=='proton') continue;
-        const dx=p.x-e.x, dy=p.y-e.y, dz=p.z-e.z;
-        const d2 = dx*dx+dy*dy+dz*dz;
-        if (d2<minD2){ minD2=d2; nearest=p; }
+(() => {
+    // Get all electrons and protons
+    const electrons = particles.filter(p => p.name === 'electron');
+    
+    // Get all protons, preferring those that are part of a nucleus
+    const allProtons = particles.filter(p => p.name === 'proton');
+    // Sort protons - put those that are part of a nucleus (boundTo is not null) first
+    const protons = allProtons.sort((a, b) => (b.boundTo ? 1 : 0) - (a.boundTo ? 1 : 0));
+    
+    // Create a configurable number of electron-proton orbits
+    const orbitsToCreate = Math.min(electrons.length, Math.floor(protons.length * 0.8));
+    const usedElectrons = [];
+    const usedProtons = [];
+    
+    for (let i = 0; i < orbitsToCreate; i++) {
+        // Find an unused electron
+        let electronIndex;
+        do {
+            electronIndex = Math.floor(Math.random() * electrons.length);
+        } while (usedElectrons.includes(electronIndex));
+        usedElectrons.push(electronIndex);
+        
+        const e = electrons[electronIndex];
+        
+        // Find an unused proton, preferring those in nuclei
+        let protonIndex;
+        do {
+            protonIndex = Math.floor(Math.random() * protons.length);
+        } while (usedProtons.includes(protonIndex));
+        usedProtons.push(protonIndex);
+        
+        const p = protons[protonIndex];
+        
+        // Adjust electron position to be at an appropriate orbital distance
+        // Choose a random orbital shell (distance) between predefined values
+        // Using larger orbital distances for better visibility
+        const orbitalDistances = [150, 200, 250, 300];
+        const idealDistance = orbitalDistances[Math.floor(Math.random() * orbitalDistances.length)];
+        
+        // Calculate vector from proton to new electron position (random direction)
+        const theta = Math.random() * 2 * Math.PI;
+        const phi = Math.acos(2 * Math.random() - 1);
+        
+        // Position electron at ideal distance from proton
+        e.x = p.x + idealDistance * Math.sin(phi) * Math.cos(theta);
+        e.y = p.y + idealDistance * Math.sin(phi) * Math.sin(theta);
+        e.z = p.z + idealDistance * Math.cos(phi);
+        
+        // Create orbit using physics helper
+        const orbit = createElectronOrbit(e, p, SIM_SETTINGS);
+        
+        // Apply orbital velocity
+        e.vx = orbit.vx;
+        e.vy = orbit.vy;
+        e.vz = orbit.vz;
+        
+        // Mark this electron as being in an orbital relationship
+        e.orbiting = p;
+        // Mark this proton as having an electron (simple atom model)
+        p.hasElectron = true;
+        
+        // For visual clarity, adjust color for electrons in orbit
+        e.orbitColor = 'deepskyblue';
+        e.el.style.background = 'deepskyblue';
+        e.el.style.boxShadow = '0 0 10px deepskyblue';
     }
-    if (!nearest) continue;
-    const dist = Math.sqrt(minD2)+0.1;
-    if (dist>SIM_SETTINGS.bindingDistance) continue;
-
-    // radial vector
-    const rx=e.x-nearest.x, ry=e.y-nearest.y, rz=e.z-nearest.z;
-    // random perp via cross
-    let wx=Math.random()*2-1, wy=Math.random()*2-1, wz=Math.random()*2-1;
-    const wlen=Math.hypot(wx,wy,wz)||1;
-    wx/=wlen; wy/=wlen; wz/=wlen;
-
-    let ux= ry*wz - rz*wy,
-        uy= rz*wx - rx*wz,
-        uz= rx*wy - ry*wx;
-    const ulen=Math.hypot(ux,uy,uz)||0.1;
-    ux/=ulen; uy/=ulen; uz/=ulen;
-
-    const v0 = Math.sqrt(
-        SIM_SETTINGS.emConst * Math.abs(e.charge*nearest.charge)
-        / (e.mass * dist)
-    );
-    const v = v0 * SIM_SETTINGS.electronOrbitScale;
-    e.vx = ux*v; e.vy = uy*v; e.vz = uz*v;
-}
-
-// spatial hash builder
-function buildSpatialHash(){
-    const grid = new Map();
-    for (const p of particles){
-        const cx=Math.floor(p.x/SIM_SETTINGS.cellSize),
-              cy=Math.floor(p.y/SIM_SETTINGS.cellSize),
-              cz=Math.floor(p.z/SIM_SETTINGS.cellSize),
-              key=`${cx},${cy},${cz}`;
-        if (!grid.has(key)) grid.set(key,[]);
-        grid.get(key).push(p);
-    }
-    return grid;
-}
+})();
 
 // explosions & black-holes
-container.addEventListener('click', evt=>{
-    if (!evt.target.classList.contains('firefly')) return;
-    evt.stopPropagation();
-    const center = particles.find(p=>p.el===evt.target),
-          orig   = center.color;
-    center.el.style.background='white';
-    setTimeout(()=> center.el.style.background=orig,150);
-    for (const p of particles){
-        const dx=p.x-center.x, dy=p.y-center.y, dz=p.z-center.z,
-              d = Math.hypot(dx,dy,dz)+0.1;
-        p.vx+=dx/d*SIM_SETTINGS.explosionStrength;
-        p.vy+=dy/d*SIM_SETTINGS.explosionStrength;
-        p.vz+=dz/d*SIM_SETTINGS.explosionStrength;
+container.addEventListener('click', evt => {
+    if (!evt.target.classList.contains('firefly')) {
+        return;
     }
+    evt.stopPropagation();
+    const center = particles.find(p => p.el === evt.target),
+          orig = center.color;
+    center.el.style.background = 'white';
+    setTimeout(() => center.el.style.background = orig, 150);
+    
+    // Create explosion using physics helper
+    createExplosion(center, particles, SIM_SETTINGS.explosionStrength);
 });
-container.addEventListener('contextmenu', evt=>{
+container.addEventListener('contextmenu', evt => {
     evt.preventDefault();
+    const camPos = camera.getPosition();
     blackHoles.push({
-        x:evt.clientX, y:evt.clientY, z:camera.pos.z,
-        mass:1e4, life:SIM_SETTINGS.bhLifetime
+        x: evt.clientX, y: evt.clientY, z: camPos.z,
+        mass: 1e4, life: SIM_SETTINGS.bhLifetime
     });
 });
 
-// zoom
-container.addEventListener('wheel', evt=>{
-    evt.preventDefault();
-    const dir = Math.sign(evt.deltaY);
-    camera.pos.z += dir * camera.zoomSpeed;
-    camera.pos.z = Math.max(camera.minZ,
-                    Math.min(camera.maxZ, camera.pos.z));
-}, { passive:false });
+// — INPUT HANDLERS —
+// begin drag
+container.addEventListener('mousedown', e => {
+    dragging = true;
+    lastMouse.x = e.clientX;
+    lastMouse.y = e.clientY;
+    slowDownActive = true;
+});
+
+// end drag
+container.addEventListener('mouseup', () => {
+    dragging = false;
+    slowDownActive = false;
+});
+
+// adjust orbit velocity on drag
+container.addEventListener('mousemove', e => {
+    if (!dragging) {
+        return;
+    }
+    const dx = e.clientX - lastMouse.x;
+    const dy = e.clientY - lastMouse.y;
+    camera.vel.y += dx * SIM_SETTINGS.dragSpeed;
+    camera.vel.x += dy * SIM_SETTINGS.dragSpeed;
+    lastMouse.x = e.clientX;
+    lastMouse.y = e.clientY;
+});
+
+// zoom focal plane on wheel
+container.addEventListener('wheel', e => {
+    e.preventDefault();
+    camera.adjustFocus(e.deltaY);
+}, { passive: false });
+
+// Create axis elements and add them to the container
+
+// Add styling and create DOM elements
+renderer.createParticleElements(particles);
+renderer.createAxisElements(axes);
 
 // main loop
-function update(){
-    const {
-        dt, emConst, exclusionRadius, exclusionRepulsion,
-        bindingSpringK, nuclearYukawaStrength, nuclearYukawaMu, nuclearRepulsionA,
-        weakDecayRate, ongoingEntropy, ongoingZEntropy,
-        friction, explosionStrength, orbitCaptureZ, speedOfLight,
-        electronOrbitScale, depthScale, nearRenderZ, farRenderZ,
-        maxRenderBlur, bhGravity, bhLifetime, scaleFactor
-    } = SIM_SETTINGS;
+function update() {
+    const { dt, slowFactor, focalLength } = SIM_SETTINGS;
 
-    // auto-orbit camera
-    angles.x += SIM_SETTINGS.orbitSpeed.x * dt;
-    angles.y += SIM_SETTINGS.orbitSpeed.y * dt;
-    angles.z += SIM_SETTINGS.orbitSpeed.z * dt;
-    camera.rot.x = angles.x;
-    camera.rot.y = angles.y;
-    camera.rot.z = angles.z;
+    // Update camera
+    camera.update(dt, slowFactor, slowDownActive);
 
-    // expire black-holes
-    for (let i=blackHoles.length-1; i>=0; i--){
-        blackHoles[i].life -= dt;
-        if (blackHoles[i].life <= 0) blackHoles.splice(i,1);
-    }
+    // Update physics using physics engine
+    updateParticlePhysics(particles, blackHoles, SIM_SETTINGS, WRAP_DISTANCE);
 
-    const grid = buildSpatialHash();
+    // Render using our rendering engine
+    renderer.renderAxes(axes, camera, focalLength);
+    renderer.renderParticles(particles, camera, focalLength);
 
-    // --- Physics pass ---
-    for (const a of particles){
-        let fx=0, fy=0, fz=0;
-        const cx=Math.floor(a.x/SIM_SETTINGS.cellSize),
-              cy=Math.floor(a.y/SIM_SETTINGS.cellSize),
-              cz=Math.floor(a.z/SIM_SETTINGS.cellSize);
-
-        // pairwise forces
-        for (let ox=-1; ox<=1; ox++) for (let oy=-1; oy<=1; oy++) for (let oz=-1; oz<=1; oz++){
-            const cell = grid.get(`${cx+ox},${cy+oy},${cz+oz}`);
-            if (!cell) continue;
-            for (const b of cell){
-                if (b===a) continue;
-                const dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z,
-                      d2=dx*dx+dy*dy+dz*dz;
-                if (d2>30000) continue;
-                const d = Math.sqrt(d2)+0.1,
-                      ux=dx/d, uy=dy/d, uz=dz/d;
-
-                // Coulomb
-                const fe = -emConst * a.charge * b.charge / Math.max(d2,100);
-                fx+=fe*ux; fy+=fe*uy; fz+=fe*uz;
-
-                // nuclear Yukawa + repulsion
-                if ((a.name==='proton'&&b.name==='neutron') ||
-                    (a.name==='neutron'&&b.name==='proton')) {
-                    const expT = Math.exp(-nuclearYukawaMu*d),
-                          Fat  = nuclearYukawaStrength*expT*(nuclearYukawaMu*d+1)/(d*d),
-                          Frep=12*nuclearRepulsionA/Math.pow(d,13),
-                          Fn   = Fat - Frep;
-                    fx+=Fn*ux; fy+=Fn*uy; fz+=Fn*uz;
-
-                    // spring + damping if bound
-                    if (a.boundTo===b){
-                        const sp = -bindingSpringK*(d - SIM_SETTINGS.bindingDistance);
-                        fx+=sp*ux; fy+=sp*uy; fz+=sp*uz;
-                        const relV = (a.vx-b.vx)*ux + (a.vy-b.vy)*uy + (a.vz-b.vz)*uz,
-                              Fd   = -50 * relV;
-                        fx+=Fd*ux; fy+=Fd*uy; fz+=Fd*uz;
-                    }
-                }
-
-                // Pauli exclusion
-                if (a.name===b.name && a.spin===b.spin && d<exclusionRadius){
-                    const re = exclusionRepulsion / d2;
-                    fx-=re*ux; fy-=re*uy; fz-=re*uz;
-                }
-            }
-        }
-
-        // black-hole gravity
-        for (const bh of blackHoles){
-            const dx=bh.x-a.x, dy=bh.y-a.y, dz=bh.z-a.z,
-                  d2=dx*dx+dy*dy+dz*dz+1, d=Math.sqrt(d2),
-                  Fg = bhGravity*(bh.mass*a.mass)/d2;
-            fx+=Fg*(dx/d); fy+=Fg*(dy/d); fz+=Fg*(dz/d);
-        }
-
-        // weak decay
-        if (a.name==='neutron' && Math.random()<weakDecayRate){
-            a.name='proton'; a.charge=1; a.color='red';
-            a.el.style.background='red';
-        }
-
-        // relativistic mass (electron)
-        let massEff = a.mass;
-        if (a.name==='electron'){
-            const v2 = a.vx*a.vx + a.vy*a.vy + a.vz*a.vz,
-                  β2 = Math.min(v2/(speedOfLight*speedOfLight),0.9999),
-                  gamma = 1/Math.sqrt(1-β2);
-            massEff = a.mass * gamma;
-        }
-
-        // integrate velocity
-        a.vx += (fx/massEff)*dt;
-        a.vy += (fy/massEff)*dt;
-        a.vz += (fz/massEff)*dt;
-
-        // jitter only for electrons
-        if (a.name==='electron'){
-            a.vx += (Math.random()-0.5)*ongoingEntropy*dt;
-            a.vy += (Math.random()-0.5)*ongoingEntropy*dt;
-            a.vz += (Math.random()-0.5)*ongoingZEntropy*dt;
-        }
-
-        // friction
-        a.vx *= friction; a.vy *= friction; a.vz *= friction;
-    }
-
-    // update positions & wrap
-    for (const a of particles){
-        a.x += a.vx * dt;
-        a.y += a.vy * dt;
-        a.z += a.vz * dt;
-        if (a.z > MAX_Z || a.z < MIN_Z) a.vz *= -1;
-        if (a.x < -50) a.x = innerWidth + 50;
-        else if (a.x > innerWidth + 50) a.x = -50;
-        if (a.y < -50) a.y = innerHeight + 50;
-        else if (a.y > innerHeight + 50) a.y = -50;
-    }
-
-    // --- Render pass using camera ---
-    const cx = innerWidth/2, cy = innerHeight/2;
-    for (const a of particles){
-        let dx = a.x - cx,
-            dy = a.y - cy,
-            dz = (a.z - camera.pos.z) * depthScale;
-
-        // rotate X
-        {
-            const ca = Math.cos(camera.rot.x),
-                  sa = Math.sin(camera.rot.x);
-            [dy, dz] = [dy*ca - dz*sa, dy*sa + dz*ca];
-        }
-        // rotate Y
-        {
-            const ca = Math.cos(camera.rot.y),
-                  sa = Math.sin(camera.rot.y);
-            [dx, dz] = [dx*ca - dz*sa, dx*sa + dz*ca];
-        }
-        // rotate Z
-        {
-            const ca = Math.cos(camera.rot.z),
-                  sa = Math.sin(camera.rot.z);
-            [dx, dy] = [dx*ca - dy*sa, dx*sa + dy*ca];
-        }
-
-        const rx   = cx + dx,
-              ry   = cy + dy,
-              zNow = camera.pos.z + dz / depthScale;
-
-        // depth culling
-        if (zNow < SIM_SETTINGS.nearRenderZ || zNow > SIM_SETTINGS.farRenderZ) {
-            a.el.style.display = 'none';
-            continue;
-        }
-
-        // blur & fade
-        const zd   = zNow - camera.pos.z,
-              za   = Math.abs(zd),
-              blur = baseBlur + za * blurScale;
-        if (blur > SIM_SETTINGS.maxRenderBlur) {
-            a.el.style.display = 'none';
-            continue;
-        }
-
-        const scale   = (scaleFactor / zNow).toFixed(2),
-              bright  = zd < 0
-                       ? 1 + Math.min(0.2, -zd)
-                       : 1 - Math.min(0.5, zd),
-              op       = Math.max(0.3, Math.min(1, 1.1 - za)).toFixed(2),
-              hueShift = a.boundTo ? 'hue-rotate(-10deg)' : '';
-
-        a.el.style.border    = 'none';
-        a.el.style.display   = '';
-        a.el.style.filter    = `blur(${blur.toFixed(2)}vw) brightness(${bright.toFixed(2)}) ${hueShift}`;
-        a.el.style.boxShadow = `0 0 ${(blur*2.5).toFixed(2)}vw ${(blur*0.6).toFixed(2)}vw ${a.color}`;
-        a.el.style.opacity   = op;
-        a.el.style.transform = `translate(${rx}px,${ry}px) scale(${scale})`;
-    }
-
+    // Continue the animation loop
     requestAnimationFrame(update);
 }
 
